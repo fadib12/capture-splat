@@ -99,3 +99,31 @@ def test_image_inventory_rejects_paths(bridge, path):
 def test_strict_json_rejects_duplicates_and_nonfinite():
     for body in [b'{"a":1,"a":2}', b'{"a":NaN}', b'{"a":1e999}']:
         with pytest.raises(ValueError): strict_json(body)
+
+
+def test_unready_runtime_preserves_uploaded_scan(tmp_path):
+    store = BridgeStore(tmp_path / 'scans', None, runtime_ready=lambda: False)
+    manifest = (room(tmp_path / 'capture') / 'capture.json').read_bytes()
+    state = store.create(manifest)
+    state['uploaded'] = {str(i): {'bytes': 1, 'sha256': 'a' * 64} for i in range(8)}
+    store.save(state['id'], state)
+    with pytest.raises(ValueError, match='still being installed'):
+        store.start(state['id'])
+    assert store.state(state['id'])['status'] == 'uploading'
+    assert not store.active.locked()
+
+
+def test_explicit_resubmission_preserves_failed_result_and_uploaded_images(tmp_path):
+    store = BridgeStore(tmp_path / 'scans', None)
+    manifest = (room(tmp_path / 'capture') / 'capture.json').read_bytes()
+    state = store.create(manifest)
+    state.update(status='failed', uploaded={'0': {'bytes': 1, 'sha256': 'a' * 64}})
+    store.save(state['id'], state)
+    result = store.folder(state['id']) / 'result'
+    result.mkdir()
+    (result / 'diagnostic.txt').write_text('retain')
+    retried = store.create(manifest)
+    assert retried['status'] == 'uploading' and retried['attempt'] == 2
+    assert retried['uploaded'] == state['uploaded']
+    assert not result.exists()
+    assert (store.folder(state['id']) / 'failed-result-1/diagnostic.txt').read_text() == 'retain'

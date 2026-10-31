@@ -50,10 +50,11 @@ def image_inventory(data: dict) -> list[str]:
 
 
 class BridgeStore:
-    def __init__(self, root: Path, worker):
+    def __init__(self, root: Path, worker, runtime_ready=None):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.worker = worker
+        self.runtime_ready = runtime_ready or (lambda: True)
         self.active = threading.Lock()
         # An interrupted model run is never presented as completed after restart.
         for path in islice(self.root.glob('*/state.json'), 9):
@@ -81,13 +82,28 @@ class BridgeStore:
         identifier = hashlib.sha256(body).hexdigest()
         folder = self.folder(identifier)
         if folder.exists():
-            return self.state(identifier)
+            state = self.state(identifier)
+            if state['status'] == 'failed':
+                attempt = int(state.get('attempt', 1))
+                if not 1 <= attempt < 3:
+                    raise ValueError('Retry limit reached; inspect the retained attempts on the PC.')
+                for name in ['result', 'worker.log']:
+                    source = folder / name
+                    archive = folder / f'failed-{name}-{attempt}'
+                    if source.exists():
+                        if source.is_symlink() or source.resolve().parent != folder.resolve() or archive.exists():
+                            raise ValueError('Unexpected retry archive path.')
+                        source.rename(archive)
+                state.update(status='uploading', attempt=attempt + 1,
+                             message='Previous attempt retained. Reusing verified uploaded images.')
+                self.save(identifier, state)
+            return state
         if sum(1 for _ in islice(self.root.iterdir(), 8)) >= 8:
             raise ValueError('PC scan limit reached. Archive old bridge scans on the PC first.')
         (folder / 'capture/rgb').mkdir(parents=True)
         (folder / 'capture/capture.json').write_bytes(body)
         state = {'id': identifier, 'status': 'uploading', 'images': paths, 'uploaded': {},
-                 'message': 'Waiting for scan images.', 'decision': 'hold'}
+                 'message': 'Waiting for scan images.', 'decision': 'hold', 'attempt': 1}
         self.save(identifier, state)
         return state
 
@@ -97,6 +113,8 @@ class BridgeStore:
             return state
         if state['status'] != 'uploading' or len(state['uploaded']) != len(state['images']):
             raise ValueError('All images must finish uploading before reconstruction.')
+        if not self.runtime_ready():
+            raise ValueError('Reconstruction runtime is still being installed.')
         if not self.active.acquire(blocking=False):
             raise ValueError('PC is reconstructing another scan. Try again after it finishes.')
         state.update(status='processing', message='ReSplat is reconstructing your scan.')

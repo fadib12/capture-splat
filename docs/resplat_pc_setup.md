@@ -1,7 +1,7 @@
 # ReSplat on the local PC
 
 Status: input adapter and experimental TLS PC bridge/mobile client implemented.
-The runtime and direct physical iPhone flow still require acceptance. A source
+GPU kernels, one local capture execution and checksum-bound TLS result delivery have passed. Physical iPhone acceptance and visual-quality comparison remain open. A source
 change requires the new 0.1.5 (6) IPA; older IPAs cannot submit scans.
 
 The existing pretrained implementation is external `cvg/resplat`, pinned to
@@ -42,7 +42,7 @@ accepted RGB-D images and ARKit pose priors; it does not run SfM. Camera axes
 convert to OpenCV exactly once through the existing COLMAP exporter. Sensor
 depth is not applied as a training loss. Input files stay untouched.
 
-The initial small preset selects eight context views. It is a runtime smoke
+The adapter overrides the upstream demo window so all prepared views (up to 512) are eligible. The initial small preset selects eight context views. It is a runtime smoke
 candidate, not evidence of full-room coverage or improved detail. The upstream
 demo rotates its PLY into a context-view frame; never treat the resulting file
 as ARKit-world or meter-validated geometry. Finite PLY and viewer load alone do
@@ -72,7 +72,7 @@ scan choose Create room splat -> Create splat on PC. This explicitly sends only
 accepted RGB photographs and the capture manifest; video, raw depth and mesh
 are not uploaded by this trial. Keep the app open. Reopening and submitting the
 same unchanged scan resumes stored image uploads or observes its existing run.
-Failed runs require PC inspection; they are never silently rerun or promoted.
+Failed runs require PC inspection. Explicitly submitting again can retry up to three attempts, reusing verified uploads and archiving earlier outputs; failures are never silently rerun or promoted.
 
 One GPU process runs at a time. The bridge bounds itself to eight scans, 512
 images per manifest, 25 MiB per image, 512 MiB uploaded per scan, and 64 MiB
@@ -98,3 +98,16 @@ runtime is unavailable. An app change requires a freshly compiled IPA.
 References: [ReSplat](https://github.com/cvg/resplat),
 [WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands),
 [ASUS Intel VMX setup](https://www.asus.com/global/support/faq/1043786/).
+
+## Runtime acceptance
+
+`scripts/probe_resplat_runtime.py` exercises both pointops KNN and Gaussian
+rasterization on CUDA before writing the local readiness receipt. Pairing stays
+available during installation, while new model execution remains gated until
+that receipt exists. The local trial produced a finite 71,680-Gaussian mobile
+model and passed authenticated TLS download/checksum verification. It remains
+`hold`: this is execution evidence, not a quality or complete-room claim.
+
+The CUDA compiler uses native Linux paths, one build job and the headers
+shipped with the pinned PyTorch NVIDIA packages. The host-side private-network
+rule can be installed with `scripts/enable_resplat_private_firewall.ps1`.

@@ -85,5 +85,6 @@ def test_command_preserves_paths_as_argv_and_bounds_render_batch():
     assert command[1] == str(Path('external/space in path/scripts/infer_colmap.py'))
     assert command[command.index('--scene_path') + 1] == 'scan inputs'
     assert command[command.index('--render_chunk_size') + 1] == '1'
+    assert command[command.index('--frame_distance') + 1] == '512'
     assert '--save_ply' in command
     assert '--no_eval' in command  # Runtime smoke is not a quality evaluation.

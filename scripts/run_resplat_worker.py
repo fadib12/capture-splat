@@ -19,7 +19,7 @@ def run(capture: Path, out: Path, root: Path) -> dict:
         raise ValueError('External ReSplat source/checkpoint pin mismatch.')
     prepare(capture, out)
     command = inference_command(root, out / 'scene', out / 'inference', sys.executable)
-    env = dict(os.environ, CUDA_HOME='/usr/local/cuda-12.8', MAX_JOBS='2', TORCH_CUDA_ARCH_LIST='8.6',
+    env = dict(os.environ, CUDA_HOME='/usr/local/cuda-12.8', MAX_JOBS='1', OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='2', TORCH_CUDA_ARCH_LIST='8.6',
                WANDB_MODE='disabled', PYTHONUNBUFFERED='1')
     env['PATH'] = '/usr/local/cuda-12.8/bin:' + env.get('PATH', '')
     with (out / 'inference.log').open('x') as log:

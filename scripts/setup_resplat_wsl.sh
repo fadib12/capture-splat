@@ -20,7 +20,19 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 export CUDA_HOME=/usr/local/cuda-12.8
 export PATH="$CUDA_HOME/bin:/opt/capture-splat-resplat/bin:$PATH"
 export TORCH_CUDA_ARCH_LIST=8.6
-export MAX_JOBS=2
-"$PY" -m pip install --no-build-isolation 'git+https://github.com/nerfstudio-project/gsplat.git@v1.5.3'
-(cd "$REPO/external/resplat/src/model/encoder/pointops" && "$PY" -m pip install --no-build-isolation .)
+export MAX_JOBS=1
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=2
+if ! "$PY" -c 'import importlib.metadata as m; assert m.version("gsplat") == "1.5.3"' >/dev/null 2>&1; then
+    "$PY" -m pip install --no-build-isolation 'git+https://github.com/nerfstudio-project/gsplat.git@v1.5.3'
+fi
+for include in /opt/capture-splat-resplat/lib/python3.12/site-packages/nvidia/*/include; do
+    if [ -d "$include" ]; then export CPATH="$include${CPATH:+:$CPATH}"; fi
+done
+if [ ! -d /opt/capture-splat-resplat-src/.git ]; then
+    git clone --no-hardlinks "$REPO/external/resplat" /opt/capture-splat-resplat-src
+fi
+[ "$(git -C /opt/capture-splat-resplat-src rev-parse HEAD)" = "cae7ddc4cdbd80e05e9f5fa00f5ea02c4e9056b1" ]
+(cd /opt/capture-splat-resplat-src/src/model/encoder/pointops && "$PY" -m pip install --no-build-isolation .)
 "$PY" -c 'import torch,gsplat,pointops; assert torch.cuda.is_available(); print(torch.__version__, gsplat.__version__, torch.cuda.get_device_name())'
+"$PY" "$REPO/scripts/probe_resplat_runtime.py"

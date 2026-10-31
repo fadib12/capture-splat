@@ -98,5 +98,6 @@ def inference_command(root: Path, scene: Path, output: Path, python: str = 'pyth
             '--checkpoint', str(root / 'pretrained' / CHECKPOINT),
             '--scene_path', str(scene), '--images_dir', 'images',
             '--sparse_dir', 'sparse/0', '--output_dir', str(output),
+            '--start_frame', '0', '--frame_distance', '512',
             '--num_target', '8', '--render_chunk_size', '1',
             '--max_save_images', '8', '--save_images', '--save_ply', '--no_eval']

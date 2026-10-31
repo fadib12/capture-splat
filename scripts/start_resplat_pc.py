@@ -54,8 +54,10 @@ def main():
     code = base64.urlsafe_b64encode(json.dumps(pairing).encode()).decode()
     (state_dir / 'connection-code.txt').write_text(code)
     import qrcode
-    qrcode.make('capturesplat-pc:' + code).save(state_dir / 'connection-qr.png')
-    store = BridgeStore(state_dir / 'scans', wsl_worker(repo))
+    if not (state_dir / 'connection-qr.png').is_file():
+        qrcode.make('capturesplat-pc:' + code).save(state_dir / 'connection-qr.png')
+    store = BridgeStore(state_dir / 'scans', wsl_worker(repo),
+                        runtime_ready=lambda: (state_dir / 'runtime-ready.json').is_file())
     server = HTTPServer((args.host, args.port), handler(store, config['token']))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
