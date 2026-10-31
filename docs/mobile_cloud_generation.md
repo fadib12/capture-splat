@@ -1,9 +1,10 @@
 # Mobile scan-to-world cloud proposal
 
-Status: proposal, not a deployed service. The iPhone records and finalizes a
-capture locally, then opens capture review. Upload, cloud jobs, completed-world
-delivery, notifications, and an in-app Gaussian viewer are not implemented by
-this change. Source changes require a fresh macOS build and installation of its resulting IPA;
+Status: proposal, not a deployed cloud service. The iPhone records and finalizes a
+capture locally. Version 0.1.4 adds local trained-splat import and an offline viewer;
+see [Local Brush training](local_brush_training.md). Upload, cloud jobs,
+completed-world delivery and notifications remain unimplemented.
+Source changes require a fresh macOS build and installation of its resulting IPA;
 repacking an older compiled binary does not apply interface changes.
 
 The intended product flow is Record -> Finish -> Review -> Create World ->

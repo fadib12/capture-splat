@@ -246,6 +246,8 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var lastAcceptedViewHint = "No accepted view yet."
     @Published var captureProfileText = "RGB-D keyframes"
     @Published var captureProfileDetail = "Quality-gated RGB, depth, pose, IMU, and GNSS bundle."
+    @Published private(set) var cameraLensLabel = "ARKit camera"
+    private var selectedCameraType: AVCaptureDevice.DeviceType?
     @Published var recordedVideoFrames = 0
     @Published var captureIntent = "room_walkthrough"
     @Published var hapticAcceptedCount = 0
@@ -984,6 +986,7 @@ final class CaptureController: NSObject, ObservableObject {
             appendSessionEvent("capture_started", details: [
                 "capture_intent": captureIntent,
                 "capture_profile": captureProfileLabel(),
+                "camera_device_type": selectedCameraType?.rawValue ?? "arkit_primary",
                 "startup_latency_seconds": startupLatency,
             ])
             logger.info("Capture recording started after \(startupLatency, privacy: .public) seconds")
@@ -1306,7 +1309,7 @@ final class CaptureController: NSObject, ObservableObject {
             "video_frame_count": videoRecorder.appendedFrameCount,
             "video_dropped_frame_count": videoRecorder.droppedFrameCount,
             "video_target_fps_at_finalize": videoRecorder.targetFPS,
-            "video_sampling_policy": "thermal_adaptive_15_10_6",
+            "video_sampling_policy": "thermal_adaptive_20_12_8_4",
             "accepted_keyframe_count": frames.count,
             "person_mask_written_count": personMaskWrittenCount,
             "person_mask_dropped_count": personMaskDroppedCount,
@@ -2155,7 +2158,7 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     private func makeSessionConfig() -> SessionConfig {
-        let device = Self.primaryCaptureDevice
+        let device = activeCaptureDevice
         return SessionConfig(
             aeLock: device?.exposureMode == .locked,
             awbLock: device?.whiteBalanceMode == .locked,
@@ -2163,16 +2166,27 @@ final class CaptureController: NSObject, ObservableObject {
             videoFormat: videoRecorder.appendedFrameCount > 0 ? "hevc" : nil,
             videoTargetFPS: videoRecorder.appendedFrameCount > 0
                 ? Int(videoRecorder.targetFPS.rounded())
-                : nil
+                : nil,
+            lens: selectedCameraType == .builtInUltraWideCamera ? "ultra_wide" : "wide"
         )
     }
 
-    private static var primaryCaptureDevice: AVCaptureDevice? {
-        ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+    func selectCaptureCamera(_ format: ARVideoFormat) {
+        selectedCameraType = format.captureDeviceType
+        let label = format.captureDeviceType == .builtInUltraWideCamera ? "0.5x Ultra Wide" : "ARKit Wide"
+        if cameraLensLabel != label { cameraLensLabel = label }
+    }
+
+    private var activeCaptureDevice: AVCaptureDevice? {
+        if let type = selectedCameraType {
+            return AVCaptureDevice.default(type, for: .video, position: .back)
+                ?? ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+        }
+        return ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
     }
 
     private func applyCaptureLocks(_ locked: Bool) {
-        guard let device = Self.primaryCaptureDevice else {
+        guard let device = activeCaptureDevice else {
             if locked {
                 statusText = "Exposure lock unavailable on this device."
             }
@@ -3313,7 +3327,7 @@ final class CaptureController: NSObject, ObservableObject {
             "minimum_keyframe_interval_seconds": activeMinimumKeyframeInterval,
             "max_captured_frames": activeMaxCapturedFrames,
             "continuous_video_target_fps": videoRecorder.targetFPS,
-            "continuous_video_sampling_policy": "thermal_adaptive_15_10_6",
+            "continuous_video_sampling_policy": "thermal_adaptive_20_12_8_4",
             "keyframe_score_threshold": activeKeyframeScoreThreshold,
             "accepted_keyframes": acceptedKeyframes,
             "skipped_keyframe_candidates": skippedKeyframes,
@@ -3395,7 +3409,7 @@ final class CaptureController: NSObject, ObservableObject {
             "accepted_frame_target": activeMaxCapturedFrames,
             "minimum_keyframe_interval_seconds": activeMinimumKeyframeInterval,
             "continuous_video_target_fps": videoRecorder.targetFPS,
-            "continuous_video_sampling_policy": "thermal_adaptive_15_10_6",
+            "continuous_video_sampling_policy": "thermal_adaptive_20_12_8_4",
             "quality_gate": [
                 "keyframe_score_threshold": activeKeyframeScoreThreshold,
                 "min_blur_score": minBlurScore,
@@ -5053,7 +5067,7 @@ extension CaptureController: ARSessionDelegate {
         latestFeaturePointCount = frame.rawFeaturePoints?.points.count ?? 0
         updateMotionRate(from: frame)
         if isRecording, currentSessionDirectory != nil {
-            videoRecorder.append(frame: frame, captureDevice: Self.primaryCaptureDevice)
+            videoRecorder.append(frame: frame, captureDevice: activeCaptureDevice)
             schedulePersonMask(from: frame)
         }
         let baseGuidanceInterval = liveGuidanceInterval(for: ProcessInfo.processInfo.thermalState)

@@ -8,7 +8,7 @@ The app opens in Room Scan with the Room Walkthrough intent already selected.
 Tap the circular **Record** control, walk a slow connected path around the room
 with overlapping views of corners and furniture, then tap **Finish**. Wait for
 saving to finish; **Review your scan** opens automatically. Inspect the LiDAR
-preview when available and choose **Export Scan**, or use **My Scans** later.
+preview evidence separately if needed and choose **Export for training**, or use **My Scans** later.
 Capture records video, quality-gated RGB-D keyframes, and camera metadata;
 generating the Gaussian splat still happens on the host computer.
 
@@ -38,10 +38,17 @@ Other capture intents, RoomPlan, sensor details, and diagnostics are under
 pairing are in the same menu. No subject lock, RoomPlan session, or pairing is
 required for rooms. Quality gates and finalization checks remain mandatory.
 
-Cloud world generation and an in-app finished-splat viewer are not connected.
-The review screen states that explicitly. The proposed first cloud trial and
-the remaining World Studio backend work are described in
-[Mobile cloud generation](../../../docs/mobile_cloud_generation.md).
+Version **0.1.4 (5)** keeps the default recording screen minimal: a timer,
+record/finish control and recording-only wireframe. The scan card, map, counters
+and explanatory overlays remain out of the default view. Full diagnostics are
+available through Capture details.
+
+The saved-scan screen offers **Export for training** and **Open trained splat**.
+The latter opens an actual `.splat` result in the bundled offline MIT viewer;
+it does not display the LiDAR preview as a trained model. See
+[Local Brush training](../../../docs/local_brush_training.md) for the downloaded
+external trainer and the PC command connecting a saved capture to this viewer.
+Cloud upload, automatic jobs and result delivery remain separate backend work.
 
 ## Build
 

@@ -36,6 +36,14 @@ struct ARCaptureView: UIViewRepresentable {
             if lastUsesCaptureSensors != policy.usesCaptureSensors || lastUsesDepth != policy.usesDepth {
                 let configuration = ARWorldTrackingConfiguration()
                 configuration.worldAlignment = .gravity
+                // Only use an ultra-wide physical camera exposed by this exact
+                // ARKit configuration. Never fake 0.5x with a crop or lose depth.
+                let ultraWide = ARWorldTrackingConfiguration.supportedVideoFormats
+                    .filter { $0.captureDeviceType == .builtInUltraWideCamera && $0.captureDevicePosition == .back }
+                    .max { $0.imageResolution.width * $0.imageResolution.height
+                        < $1.imageResolution.width * $1.imageResolution.height }
+                if let ultraWide { configuration.videoFormat = ultraWide }
+                capture.selectCaptureCamera(configuration.videoFormat)
                 if policy.usesDepth,
                    ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                     configuration.frameSemantics.insert(.sceneDepth)

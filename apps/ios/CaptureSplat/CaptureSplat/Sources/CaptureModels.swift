@@ -167,7 +167,7 @@ struct SessionConfig: Encodable {
     let focusLock: Bool
     let videoFormat: String?
     let videoTargetFPS: Int?
-    let lens = "wide"
+    let lens: String
 
     enum CodingKeys: String, CodingKey {
         case lens

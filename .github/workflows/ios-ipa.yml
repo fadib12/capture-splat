@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate bundled viewer JavaScript
+        run: node --check apps/ios/CaptureSplat/CaptureSplat/Resources/SplatViewer/main.js
+
       - name: Validate preview history sampling
         run: |
           xcrun swiftc \
@@ -35,9 +38,12 @@ jobs:
 
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/CaptureSplat.app"
           test -d "$APP_PATH"
+          test -f "$APP_PATH/SplatViewer/index.html"
+          test -f "$APP_PATH/SplatViewer/main.js"
+          test -f "$APP_PATH/SplatViewer/LICENSE"
           /usr/libexec/PlistBuddy -c "Add :CaptureSplatBuildCommit string $GITHUB_SHA" "$APP_PATH/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.3"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "4"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.4"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "5"
           mkdir -p "$RUNNER_TEMP/package/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
           cd "$RUNNER_TEMP/package"
