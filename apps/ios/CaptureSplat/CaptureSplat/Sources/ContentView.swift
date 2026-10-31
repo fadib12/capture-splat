@@ -142,46 +142,58 @@ struct ContentView: View {
                 livePairing.handleBackgrounding()
             }
         }
-        .alert("Could not open splat", isPresented: Binding(
-            get: { splatImportError != nil }, set: { if !$0 { splatImportError = nil } }
-        )) {
+        .alert("Could not open splat", isPresented: isSplatImportErrorPresented) {
             Button("OK") { splatImportError = nil }
         } message: { Text(splatImportError ?? "") }
         .preferredColorScheme(.dark)
         .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-            case .export:
-                exportPresetSheet
-            case .camera:
-                cameraSettingsSheet
-            case .livePairing:
-                LivePairingView(coordinator: livePairing)
-            case .review:
-                pointCloudReviewSheet
-            case .roomPlan:
-                roomPlanCaptureSheet
-            case .importSplat:
-                SplatFilePicker { result in
-                    switch result {
-                    case .success(let url):
-                        if let url { trainedSplatURL = url; activeSheet = .splatViewer }
-                        else { activeSheet = nil }
-                    case .failure(let error):
-                        splatImportError = error.localizedDescription
-                        activeSheet = nil
+            sheetContent(sheet)
+        }
+    }
+
+    private var isSplatImportErrorPresented: Binding<Bool> {
+        Binding<Bool>(get: { splatImportError != nil }, set: { presented in
+            if !presented { splatImportError = nil }
+        })
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ sheet: ActiveSheet) -> some View {
+        switch sheet {
+        case .export: exportPresetSheet
+        case .camera: cameraSettingsSheet
+        case .livePairing: LivePairingView(coordinator: livePairing)
+        case .review: pointCloudReviewSheet
+        case .roomPlan: roomPlanCaptureSheet
+        case .importSplat: importSplatSheet
+        case .splatViewer: trainedSplatSheet
+        }
+    }
+
+    private var importSplatSheet: some View {
+        SplatFilePicker { result in
+            switch result {
+            case .success(let url):
+                if let url { trainedSplatURL = url; activeSheet = .splatViewer }
+                else { activeSheet = nil }
+            case .failure(let error):
+                splatImportError = error.localizedDescription
+                activeSheet = nil
+            }
+        }
+    }
+
+    private var trainedSplatSheet: some View {
+        NavigationStack {
+            if let url = trainedSplatURL {
+                TrainedSplatViewer(model: url).ignoresSafeArea(edges: .bottom)
+                    .navigationTitle("Room Splat")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { activeSheet = nil }
+                        }
                     }
-                }
-            case .splatViewer:
-                NavigationStack {
-                    if let url = trainedSplatURL {
-                        TrainedSplatViewer(model: url).ignoresSafeArea(edges: .bottom)
-                            .navigationTitle("Room Splat")
-                            .navigationBarTitleDisplayMode(.inline)
-                            .toolbar { ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { activeSheet = nil }
-                            } }
-                    }
-                }
             }
         }
     }

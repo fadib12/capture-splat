@@ -2171,7 +2171,7 @@ final class CaptureController: NSObject, ObservableObject {
         )
     }
 
-    func selectCaptureCamera(_ format: ARVideoFormat) {
+    func selectCaptureCamera(_ format: ARConfiguration.VideoFormat) {
         selectedCameraType = format.captureDeviceType
         let label = format.captureDeviceType == .builtInUltraWideCamera ? "0.5x Ultra Wide" : "ARKit Wide"
         if cameraLensLabel != label { cameraLensLabel = label }
