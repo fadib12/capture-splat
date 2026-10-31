@@ -70,6 +70,17 @@ struct ContentView: View {
     @State private var splatImportError: String?
 
     var body: some View {
+        captureLifecycleView
+        .alert("Could not open splat", isPresented: isSplatImportErrorPresented) {
+            Button("OK") { splatImportError = nil }
+        } message: { Text(splatImportError ?? "") }
+        .preferredColorScheme(.dark)
+        .sheet(item: $activeSheet) { sheet in
+            sheetContent(sheet)
+        }
+    }
+
+    private var captureWorkspace: some View {
         ZStack {
             if activeSheet != .livePairing {
                 if selectedTab == .capture, activeSheet == nil, scenePhase == .active {
@@ -101,14 +112,14 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
-        .task {
-            await livePairing.restore()
-            capture.prepareSensors()
-            capture.setScanTargetMode(scanMode.controllerTargetMode)
-            capture.setSpatialGuidanceVisible(viewMode == .guidance)
-            refreshCaptureLibrary()
-            trainedSplatURL = SplatLibrary.latest
-        }
+    }
+
+    private var initializedWorkspace: some View {
+        captureWorkspace.task { await initializeCaptureWorkspace() }
+    }
+
+    private var captureLifecycleView: some View {
+        initializedWorkspace
         .onChange(of: scanMode) { _, mode in
             capture.setScanTargetMode(mode.controllerTargetMode)
         }
@@ -142,13 +153,16 @@ struct ContentView: View {
                 livePairing.handleBackgrounding()
             }
         }
-        .alert("Could not open splat", isPresented: isSplatImportErrorPresented) {
-            Button("OK") { splatImportError = nil }
-        } message: { Text(splatImportError ?? "") }
-        .preferredColorScheme(.dark)
-        .sheet(item: $activeSheet) { sheet in
-            sheetContent(sheet)
-        }
+    }
+
+    private func initializeCaptureWorkspace() async {
+        await livePairing.restore()
+        capture.prepareSensors()
+        capture.setScanTargetMode(scanMode.controllerTargetMode)
+        capture.setSpatialGuidanceVisible(viewMode == .guidance)
+        refreshCaptureLibrary()
+        let latestModel: URL? = SplatLibrary.latest
+        trainedSplatURL = latestModel
     }
 
     private var isSplatImportErrorPresented: Binding<Bool> {
