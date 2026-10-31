@@ -65,8 +65,9 @@ fingerprint and token: treat it like a password. Never publish it. The app
 stores it in this device's Keychain and rejects redirects or mismatched TLS
 certificates. No SpAItial key is used or sent to the phone.
 
-In the newly compiled app choose More -> Connect reconstruction PC, paste the
-code from `runs/pc-bridge/connection-code.txt`, and connect. After a finalized
+In the newly compiled app choose More -> Connect reconstruction PC -> Scan PC
+QR code and scan `runs/pc-bridge/connection-qr.png`. Pasting the private code
+from `runs/pc-bridge/connection-code.txt` is also supported. After a finalized
 scan choose Create room splat -> Create splat on PC. This explicitly sends only
 accepted RGB photographs and the capture manifest; video, raw depth and mesh
 are not uploaded by this trial. Keep the app open. Reopening and submitting the

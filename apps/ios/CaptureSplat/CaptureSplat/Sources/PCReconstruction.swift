@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import Security
 import SwiftUI
+import VisionKit
 
 private struct PCConnection: Codable {
     let url: String
@@ -10,7 +11,8 @@ private struct PCConnection: Codable {
     let token: String
 
     static func parse(_ code: String) throws -> PCConnection {
-        let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        var code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        if code.hasPrefix("capturesplat-pc:") { code = String(code.dropFirst("capturesplat-pc:".count)) }
         guard code.count < 2048 else { throw PCError.invalidConnection }
         let standard = code.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         guard let data = Data(base64Encoded: standard),
@@ -202,11 +204,15 @@ struct PCReconstructionView: View {
     let openModel: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var code = ""
+    @State private var scanning = false
     var body: some View {
         NavigationStack {
             Form {
                 if !client.configured {
                     Section("Connect this PC") {
+                        if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+                            Button("Scan PC QR code", systemImage: "qrcode.viewfinder") { scanning = true }
+                        }
                         SecureField("Paste PC connection code", text: $code)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         Button("Connect") { Task { await client.connect(code: code); code = "" } }
@@ -230,6 +236,12 @@ struct PCReconstructionView: View {
             .navigationTitle("PC reconstruction")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .interactiveDismissDisabled(client.busy)
+            .sheet(isPresented: $scanning) {
+                LivePairingQRScanner(onInvitation: { invitation in
+                    scanning = false
+                    Task { await client.connect(code: invitation) }
+                }, onFailure: { error in scanning = false; client.message = error }, acceptedPrefix: "capturesplat-pc:")
+            }
         }
     }
 }

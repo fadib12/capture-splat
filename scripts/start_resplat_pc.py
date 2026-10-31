@@ -53,6 +53,8 @@ def main():
     pairing = {'url': f'https://{args.host}:{args.port}', 'pin': config['pin'], 'token': config['token']}
     code = base64.urlsafe_b64encode(json.dumps(pairing).encode()).decode()
     (state_dir / 'connection-code.txt').write_text(code)
+    import qrcode
+    qrcode.make('capturesplat-pc:' + code).save(state_dir / 'connection-qr.png')
     store = BridgeStore(state_dir / 'scans', wsl_worker(repo))
     server = HTTPServer((args.host, args.port), handler(store, config['token']))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

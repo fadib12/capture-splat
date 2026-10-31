@@ -353,14 +353,16 @@ struct LivePairingView: View {
     }
 }
 
-private struct LivePairingQRScanner: UIViewControllerRepresentable {
+struct LivePairingQRScanner: UIViewControllerRepresentable {
     let onInvitation: (String) -> Void
     let onFailure: (String) -> Void
+    var acceptedPrefix: String = LiveAuthContract.qrPrefix
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onInvitation: onInvitation,
-            onFailure: onFailure
+            onFailure: onFailure,
+            acceptedPrefix: acceptedPrefix
         )
     }
 
@@ -406,13 +408,16 @@ private struct LivePairingQRScanner: UIViewControllerRepresentable {
         let onFailure: (String) -> Void
         var didStart = false
         private var emitted = false
+        let acceptedPrefix: String
 
         init(
             onInvitation: @escaping (String) -> Void,
-            onFailure: @escaping (String) -> Void
+            onFailure: @escaping (String) -> Void,
+            acceptedPrefix: String
         ) {
             self.onInvitation = onInvitation
             self.onFailure = onFailure
+            self.acceptedPrefix = acceptedPrefix
         }
 
         func dataScanner(
@@ -424,7 +429,7 @@ private struct LivePairingQRScanner: UIViewControllerRepresentable {
             for item in addedItems {
                 guard case .barcode(let barcode) = item,
                       let value = barcode.payloadStringValue,
-                      value.hasPrefix(LiveAuthContract.qrPrefix) else {
+                      value.hasPrefix(acceptedPrefix) else {
                     continue
                 }
                 emitted = true
