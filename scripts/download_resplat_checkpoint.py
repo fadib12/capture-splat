@@ -19,7 +19,7 @@ def download(profile: str, directory: Path) -> Path:
             raise ValueError('Existing checkpoint does not match the pinned SHA-256; it was retained.')
         return target
     temporary = target.with_suffix('.download')
-    url = f"https://huggingface.co/cvg/ReSplat/resolve/{MODEL_REVISION}/{config['checkpoint']}"
+    url = f"https://huggingface.co/haofeixu/resplat/resolve/{MODEL_REVISION}/{config['checkpoint']}"
     # Exclusive creation protects an earlier interrupted download for inspection.
     with temporary.open('xb') as output:
         digest = hashlib.sha256()
