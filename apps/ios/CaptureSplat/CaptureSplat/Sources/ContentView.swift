@@ -48,7 +48,6 @@ private enum ActiveSheet: String, Identifiable {
     case review
     case roomPlan
     case importSplat
-    case splatViewer
     case pcReconstruction
 
     var id: String { rawValue }
@@ -63,6 +62,8 @@ struct ContentView: View {
     @State private var viewMode: ScanViewMode = .guidance
     @State private var isCapturePanelExpanded = false
     @State private var activeSheet: ActiveSheet?
+    @State private var isShowingSplatViewer = false
+    @State private var pendingSplatViewer = false
     @State private var captureLibrary: [CaptureLibraryItem] = []
     @State private var selectedCaptureID: String?
     @State private var reviewCaptureID: String?
@@ -77,15 +78,19 @@ struct ContentView: View {
             Button("OK") { splatImportError = nil }
         } message: { Text(splatImportError ?? "") }
         .preferredColorScheme(.dark)
-        .sheet(item: $activeSheet) { sheet in
+        .sheet(item: $activeSheet, onDismiss: presentPendingSplatViewer) { sheet in
             sheetContent(sheet)
+        }
+        .fullScreenCover(isPresented: $isShowingSplatViewer) {
+            trainedSplatPage
+                .interactiveDismissDisabled()
         }
     }
 
     private var captureWorkspace: some View {
         ZStack {
             if activeSheet != .livePairing {
-                if selectedTab == .capture, activeSheet == nil, scenePhase == .active {
+                if selectedTab == .capture, activeSheet == nil, !isShowingSplatViewer, !pendingSplatViewer, scenePhase == .active {
                     ARCaptureView()
                         .ignoresSafeArea()
                 } else {
@@ -182,11 +187,10 @@ struct ContentView: View {
         case .review: pointCloudReviewSheet
         case .roomPlan: roomPlanCaptureSheet
         case .importSplat: importSplatSheet
-        case .splatViewer: trainedSplatSheet
         case .pcReconstruction:
             PCReconstructionView(client: pcReconstruction, directory: reviewIsFinalized ? reviewDirectory : nil) { model in
                 trainedSplatURL = model
-                activeSheet = .splatViewer
+                openSplatViewer()
             }
         }
     }
@@ -195,7 +199,7 @@ struct ContentView: View {
         SplatFilePicker { result in
             switch result {
             case .success(let url):
-                if let url { trainedSplatURL = url; activeSheet = .splatViewer }
+                if let url { trainedSplatURL = url; openSplatViewer() }
                 else { activeSheet = nil }
             case .failure(let error):
                 splatImportError = error.localizedDescription
@@ -204,7 +208,23 @@ struct ContentView: View {
         }
     }
 
-    private var trainedSplatSheet: some View {
+    private func openSplatViewer() {
+        if activeSheet != nil {
+            // Finish dismissing the importer/PC sheet before presenting a page.
+            pendingSplatViewer = true
+            activeSheet = nil
+        } else {
+            isShowingSplatViewer = true
+        }
+    }
+
+    private func presentPendingSplatViewer() {
+        guard pendingSplatViewer else { return }
+        pendingSplatViewer = false
+        isShowingSplatViewer = true
+    }
+
+    private var trainedSplatPage: some View {
         NavigationStack {
             if let url = trainedSplatURL {
                 TrainedSplatViewer(model: url).ignoresSafeArea(edges: .bottom)
@@ -212,7 +232,7 @@ struct ContentView: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { activeSheet = nil }
+                            Button("Done") { isShowingSplatViewer = false }
                         }
                     }
             }
@@ -248,7 +268,7 @@ struct ContentView: View {
 
                 Menu {
                     if trainedSplatURL != nil {
-                        Button("View room splat", systemImage: "cube.transparent") { activeSheet = .splatViewer }
+                        Button("View room splat", systemImage: "cube.transparent") { openSplatViewer() }
                     }
                     Button("Open trained splat", systemImage: "square.and.arrow.down") { activeSheet = .importSplat }
                     Button("Connect reconstruction PC", systemImage: "desktopcomputer") { activeSheet = .pcReconstruction }
@@ -257,7 +277,7 @@ struct ContentView: View {
                     }
                     Button("Camera settings", systemImage: "camera.aperture") { activeSheet = .camera }
                     Button("World Studio pairing", systemImage: "antenna.radiowaves.left.and.right") { activeSheet = .livePairing }
-                    Text("Version 0.1.6 (8)")
+                    Text("Version 0.1.7 (9)")
                 } label: {
                     Image(systemName: "ellipsis").frame(width: 44, height: 44)
                         .background(.ultraThinMaterial, in: Circle())
@@ -1256,7 +1276,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 if trainedSplatURL != nil {
-                    Button("View last room splat") { activeSheet = .splatViewer }
+                    Button("View last room splat") { openSplatViewer() }
                 }
                 Spacer()
             }

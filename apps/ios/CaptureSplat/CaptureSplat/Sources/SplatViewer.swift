@@ -238,6 +238,9 @@ struct TrainedSplatViewer: UIViewRepresentable {
         view.isOpaque = false
         view.backgroundColor = .black
         view.scrollView.isScrollEnabled = false
+        view.scrollView.bounces = false
+        view.scrollView.alwaysBounceVertical = false
+        view.scrollView.alwaysBounceHorizontal = false
         view.load(URLRequest(url: URL(string: "capturesplat://viewer/index.html")!))
         return view
     }
