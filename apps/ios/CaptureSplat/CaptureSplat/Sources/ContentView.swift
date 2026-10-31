@@ -57,7 +57,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: WorkspaceTab = .capture
     @State private var scanMode: ScanMode = .video3DGS
-    @State private var viewMode: ScanViewMode = .camera
+    @State private var viewMode: ScanViewMode = .guidance
     @State private var isCapturePanelExpanded = false
     @State private var activeSheet: ActiveSheet?
     @State private var captureLibrary: [CaptureLibraryItem] = []
@@ -169,7 +169,7 @@ struct ContentView: View {
                                 Text(began, style: .timer).monospacedDigit()
                             }
                         } else {
-                            Text("Room Scan ? 0.1.1 (2)")
+                            Text("Room Scan ? 0.1.2 (3)")
                         }
                     }
                     .font(.caption)
@@ -323,6 +323,15 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if capture.isRecording {
+                    HStack {
+                        Text("\(capture.acceptedKeyframes) useful views")
+                        Spacer()
+                        Text("\(capture.pointCloudPreviewPointCount) preview points")
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
                 if capture.requiresSubjectTarget {
                     compactIntentAndTargetControls
                 }
@@ -390,6 +399,19 @@ struct ContentView: View {
                 )
                 Spacer()
             }
+            HStack {
+                Label(capture.trackingStatus == "normal" ? "Tracking steady" : "Tracking: \(capture.trackingStatus)",
+                      systemImage: capture.trackingStatus == "normal" ? "checkmark.circle" : "exclamationmark.triangle")
+                    .foregroundStyle(capture.trackingStatus == "normal" ? .green : .orange)
+                Spacer()
+            }
+            .font(.caption.weight(.semibold))
+            .padding(8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            Text("Wireframe: observed surfaces. Map brightness: nearby accepted views.")
+                .font(.caption2)
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
             if let notice = capture.spatialGuidanceThermalNotice {
                 Label(notice, systemImage: "thermometer.sun")
                     .font(.caption)
@@ -2112,7 +2134,7 @@ private struct PointCloudPreviewScene: UIViewRepresentable {
         var positions: [Float] = []
         var colors: [Float] = []
         var bounds = PreviewBounds.empty
-        for row in rows.prefix(12000) {
+        for row in rows.prefix(100_000) {
             guard let x = number(row["x"]),
                   let y = number(row["y"]),
                   let z = number(row["z"]) else { continue }

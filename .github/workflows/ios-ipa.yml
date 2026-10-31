@@ -12,6 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate preview history sampling
+        run: |
+          xcrun swiftc \
+            apps/ios/CaptureSplat/CaptureSplat/Sources/CaptureModels.swift \
+            tests/swift/PreviewReservoirProbe.swift \
+            -o "$RUNNER_TEMP/preview-reservoir-probe"
+          "$RUNNER_TEMP/preview-reservoir-probe"
+
       - name: Build unsigned iPhone app
         run: |
           set -euo pipefail
@@ -28,8 +36,8 @@ jobs:
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/CaptureSplat.app"
           test -d "$APP_PATH"
           /usr/libexec/PlistBuddy -c "Add :CaptureSplatBuildCommit string $GITHUB_SHA" "$APP_PATH/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.1"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "2"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.2"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "3"
           mkdir -p "$RUNNER_TEMP/package/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
           cd "$RUNNER_TEMP/package"

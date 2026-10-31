@@ -467,9 +467,10 @@ final class CaptureController: NSObject, ObservableObject {
     private var objectMatteFrameRecords: [[String: Any]] = []
     private var objectMatteFrameRecordsWereTruncated = false
     private var objectMatteSupportCounts: [String: Int] = [:]
-    private var pointCloudPreviewSamples: [[String: Any]] = []
-    private let maxPointCloudPreviewSamples = 6000
-    private let pointCloudPreviewCheckpointInterval = 20
+    private var pointCloudPreview = BoundedPreviewReservoir<[String: Any]>(capacity: 100_000)
+    private var pointCloudPreviewSamples: [[String: Any]] { pointCloudPreview.values }
+    private let maxPointCloudPreviewSamples = 100_000
+    private let pointCloudPreviewCheckpointInterval = 60
     private var latestCameraTransform: simd_float4x4?
     private var latestTargetCandidateWorldPosition: SIMD3<Float>?
     private var latestTargetCandidateDistance: Float?
@@ -923,7 +924,7 @@ final class CaptureController: NSObject, ObservableObject {
             objectMatteFrameRecords.removeAll()
             objectMatteFrameRecordsWereTruncated = false
             objectMatteSupportCounts.removeAll()
-            pointCloudPreviewSamples.removeAll()
+            pointCloudPreview.removeAll()
             pointCloudPreviewPointCount = 0
             pointCloudPreviewFile = directory.appendingPathComponent("pointcloud_preview").appendingPathComponent("preview.json")
             roomPlanFile = nil
@@ -2261,7 +2262,9 @@ final class CaptureController: NSObject, ObservableObject {
 
     private func videoTargetFPS(for state: ProcessInfo.ThermalState) -> Double {
         switch state {
-        case .nominal, .fair:
+        case .nominal:
+            return 24
+        case .fair:
             return 15
         case .serious:
             return 10
@@ -4121,6 +4124,9 @@ final class CaptureController: NSObject, ObservableObject {
             captureBlockerStatus = "Side-step now"
             captureBlockerDetail = "Back near the last accepted view. Move sideways 20-40 cm while keeping overlap."
             lastAcceptedViewHint = "Reconnect cleared; next haptic should come after a small side-step."
+        case "too_similar_to_last_keyframe", "angle_already_covered":
+            captureBlockerStatus = "Add a new viewpoint"
+            captureBlockerDetail = "Take a small sideways step with the same corner in view; rotating in place adds little depth detail."
         case "needs_translation_not_pan":
             captureBlockerStatus = "Needs translation"
             captureBlockerDetail = "Do not only rotate. Side-step while keeping the same subject or wall in view."
@@ -4950,12 +4956,14 @@ extension CaptureController: ARSessionDelegate {
             "error": error.localizedDescription,
         ])
         statusText = "AR session failed. Finalizing available capture evidence."
+        trackingStatus = "failed"
         if isRecording {
             stopRecording()
         }
     }
 
     func sessionWasInterrupted(_ session: ARSession) {
+        trackingStatus = "interrupted"
         logger.notice("AR session interrupted")
         appendSessionEvent("arkit_session_interrupted", arTimestamp: lastFrameTimestamp)
         if isRecording {
@@ -4965,6 +4973,7 @@ extension CaptureController: ARSessionDelegate {
     }
 
     func sessionInterruptionEnded(_ session: ARSession) {
+        trackingStatus = "recovering"
         logger.notice("AR session interruption ended; waiting for tracking recovery")
         appendSessionEvent("arkit_session_interruption_ended", arTimestamp: lastFrameTimestamp)
         if isRecording {
@@ -5149,6 +5158,7 @@ extension CaptureController: ARSessionDelegate {
                     }
                     let previewSamples = self.makePointCloudPreviewSamples(
                         depthMap: depthBuffer,
+                        confidenceMap: confidenceBuffer,
                         rgbBuffer: rgbBuffer,
                         transform: transform,
                         intrinsics: intrinsics,
@@ -5321,20 +5331,24 @@ extension CaptureController: ARSessionDelegate {
 
     private func makePointCloudPreviewSamples(
         depthMap: CVPixelBuffer,
+        confidenceMap: CVPixelBuffer?,
         rgbBuffer: CVPixelBuffer,
         transform: simd_float4x4,
         intrinsics: CameraIntrinsics,
         frameIndex: Int
     ) -> [[String: Any]] {
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        guard CVPixelBufferLockBaseAddress(depthMap, .readOnly) == kCVReturnSuccess else {
+            return []
+        }
         defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
 
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
         guard width > 0,
               height > 0,
-              intrinsics.flX != 0,
-              intrinsics.flY != 0,
+              intrinsics.flX.isFinite, intrinsics.flX > 0,
+              intrinsics.flY.isFinite, intrinsics.flY > 0,
+              intrinsics.cx.isFinite, intrinsics.cy.isFinite,
               let base = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self) else {
             return []
         }
@@ -5346,8 +5360,27 @@ extension CaptureController: ARSessionDelegate {
             }
         }
         let sampler = rgbLocked ? makeYCbCrSampler(fromLocked: rgbBuffer) : nil
-        let columns = 12
-        let rows = 9
+        let depthRowStride = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.stride
+        let confidenceLocked = confidenceMap.map {
+            CVPixelBufferLockBaseAddress($0, .readOnly) == kCVReturnSuccess
+        } ?? false
+        defer {
+            if confidenceLocked, let confidenceMap {
+                CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly)
+            }
+        }
+        var confidenceBase: UnsafeMutablePointer<UInt8>?
+        var confidenceRowStride = 0
+        if confidenceLocked, let confidenceMap,
+           CVPixelBufferGetWidth(confidenceMap) == width,
+           CVPixelBufferGetHeight(confidenceMap) == height {
+            confidenceBase = CVPixelBufferGetBaseAddress(confidenceMap)?.assumingMemoryBound(to: UInt8.self)
+            confidenceRowStride = CVPixelBufferGetBytesPerRow(confidenceMap)
+        }
+        // Fail closed when a supplied confidence map cannot be read.
+        guard confidenceMap == nil || confidenceBase != nil else { return [] }
+        let columns = min(width, 64)
+        let rows = min(height, 48)
         var samples: [[String: Any]] = []
         samples.reserveCapacity(columns * rows)
 
@@ -5355,8 +5388,11 @@ extension CaptureController: ARSessionDelegate {
             for column in 0..<columns {
                 let x = min(max((column * width) / columns + width / (columns * 2), 0), width - 1)
                 let y = min(max((row * height) / rows + height / (rows * 2), 0), height - 1)
-                let depth = base[y * width + x]
-                guard depth.isFinite, depth > 0 else { continue }
+                let depth = base[y * depthRowStride + x]
+                guard depth.isFinite, depth >= 0.15, depth <= 6 else { continue }
+                if let confidenceBase, confidenceBase[y * confidenceRowStride + x] < 1 {
+                    continue
+                }
 
                 let cameraX = (Float(x) - intrinsics.cx) / intrinsics.flX * depth
                 let cameraY = -((Float(y) - intrinsics.cy) / intrinsics.flY * depth)
@@ -5389,10 +5425,7 @@ extension CaptureController: ARSessionDelegate {
         guard !samples.isEmpty else {
             return (pointCloudPreviewSamples.count, pointCloudPreviewFile)
         }
-        pointCloudPreviewSamples.append(contentsOf: samples)
-        if pointCloudPreviewSamples.count > maxPointCloudPreviewSamples {
-            pointCloudPreviewSamples.removeFirst(pointCloudPreviewSamples.count - maxPointCloudPreviewSamples)
-        }
+        pointCloudPreview.append(contentsOf: samples)
         let url = directory.appendingPathComponent("pointcloud_preview", isDirectory: true).appendingPathComponent("preview.json")
         guard frameIndex.isMultiple(of: pointCloudPreviewCheckpointInterval) else {
             return (pointCloudPreviewSamples.count, pointCloudPreviewFile)
@@ -5406,6 +5439,12 @@ extension CaptureController: ARSessionDelegate {
             "schema": "capture_splat.pointcloud_preview.v0.1",
             "point_count": pointCloudPreviewSamples.count,
             "max_point_count": maxPointCloudPreviewSamples,
+            "source_sample_count": pointCloudPreview.totalSeen,
+            "sampling_method": "deterministic_reservoir_across_accepted_frames",
+            "samples_per_frame_limit": 3072,
+            "minimum_depth_confidence": "medium_when_available",
+            "confidence_unavailable_policy": "finite_in_range_depth_only",
+            "depth_range_meters": [0.15, 6.0],
             "coordinate_frame": "arkit_world_preview",
             "color_source": "rgb_sampled_when_available",
             "capture_guidance_only": true,

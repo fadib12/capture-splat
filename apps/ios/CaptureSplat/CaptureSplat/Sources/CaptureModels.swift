@@ -233,3 +233,44 @@ struct Authority: Encodable {
         case semanticAuthority = "semantic_authority"
     }
 }
+
+/// Bounded deterministic sampling across the entire accepted capture history.
+/// Confined to the writer queue; preview density never affects capture gates.
+struct BoundedPreviewReservoir<Element> {
+    let capacity: Int
+    private(set) var values: [Element] = []
+    private(set) var totalSeen: UInt64 = 0
+    private var randomState: UInt64 = 0x4353504C4154
+
+    init(capacity: Int) {
+        precondition(capacity >= 0)
+        self.capacity = capacity
+    }
+
+    mutating func removeAll() {
+        values.removeAll(keepingCapacity: true)
+        totalSeen = 0
+        randomState = 0x4353504C4154
+    }
+
+    mutating func append(contentsOf elements: [Element]) {
+        for element in elements {
+            guard totalSeen < UInt64.max else { return }
+            totalSeen += 1
+            guard capacity > 0 else { continue }
+            if values.count < capacity {
+                values.append(element)
+            } else {
+                randomState &+= 0x9E3779B97F4A7C15
+                var random = randomState
+                random = (random ^ (random >> 30)) &* 0xBF58476D1CE4E5B9
+                random = (random ^ (random >> 27)) &* 0x94D049BB133111EB
+                random ^= random >> 31
+                let index = random % totalSeen
+                if index < UInt64(capacity) {
+                    values[Int(index)] = element
+                }
+            }
+        }
+    }
+}

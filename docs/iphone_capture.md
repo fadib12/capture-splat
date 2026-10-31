@@ -23,8 +23,8 @@ Capture and finalize locally, then open **Projects** and use **Manual Export**.
 That is the production iPhone-to-host path. World Studio live transfer is an
 optional experiment and is not required for reconstruction.
 
-The capture view defaults to **Camera** in build 0.1.1 (2), keeping the live
-preview clear. Select **Guidance** under Capture details for spatial overlays. On supported LiDAR iPhones it shows
+The capture view defaults to **Guidance** in build 0.1.2 (3). Select **Camera**
+under Capture details to hide spatial overlays. On supported LiDAR iPhones it shows
 RealityKit scene-understanding wireframe plus a gravity-aligned map of the
 camera trail, observed surface cells, accepted-keyframe coverage, and heading.
 Switch to **Camera** to hide these inspection overlays without changing the
@@ -246,3 +246,28 @@ frame queue. Complete the exact
 later integration stays downstream of completed atomic writes. Thermal,
 storage, background, or network pressure must pause transport before it can
 affect keyframe acceptance or source evidence.
+
+## Dense preview and recording feedback (0.1.2)
+
+The LiDAR review is a sampled capture preview, not the finished Gaussian splat.
+Earlier builds used only 12 x 9 depth samples per accepted frame; 216 preview
+points are consistent with two such frames, even when continuous video contains
+many more frames. Build 0.1.2 samples up to 64 x 48 positions per accepted frame
+and retains a bounded deterministic reservoir of at most 100,000 points across
+the entire accepted history, rather than dropping the beginning of a long scan.
+The preview remains in ARKit/OpenGL camera axes and ARKit world coordinates.
+Padded depth/confidence row strides are respected; invalid depth and supplied
+low-confidence samples are excluded. Without a confidence map, only finite
+in-range depth is used, and the preview metadata declares that fallback.
+
+Live feedback separates video recording from accepted RGB-D views and preview
+points. Tracking interruption/recovery cannot display a steady-tracking badge.
+The layout map indicates observed anchor cells near accepted views; its bright
+cells do not prove line of sight, complete surface coverage, or reconstruction.
+
+The video sampling target is 24 FPS at nominal temperature, 15 at fair, 10 at
+serious, and 6 at critical. Higher temporal sampling does not increase LiDAR
+resolution or relax motion, exposure, tracking, feature, or parallax gates.
+Full-resolution source video and RGB-D sidecars remain the reconstruction
+input. Actual achieved FPS, drop counts, thermal behavior, and fixed-camera
+visual evidence still need physical-device validation on this build.

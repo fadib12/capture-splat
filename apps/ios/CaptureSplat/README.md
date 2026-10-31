@@ -12,15 +12,26 @@ preview when available and choose **Export Scan**, or use **My Scans** later.
 Capture records video, quality-gated RGB-D keyframes, and camera metadata;
 generating the Gaussian splat still happens on the host computer.
 
-The camera-first screen starts with a clear camera view, elapsed recording time,
-recorded video-frame count, capture guidance, and the record control. Build
-0.1.1 (2) is shown on the idle screen so it can be distinguished from old IPAs.
-Guidance overlays and the map remain available in Capture details.
-Coverage is capture guidance, not proof that the whole room is reconstructed.
+The camera-first screen in **0.1.2 (3)** enables Guidance by default: live ARKit
+wireframe, an observed-layout map, tracking state, and actual capture hold
+reasons. Video frames, accepted useful views, and sampled preview points are
+reported separately. A wireframe means ARKit observed a surface; brighter map
+cells mean an accepted view was nearby, not that a surface is fully captured.
+Thermal downgrades are shown and retained in the capture evidence.
+
+The review preview samples up to 64 x 48 depth positions per accepted frame,
+rejects invalid/out-of-range depth and low confidence when available, and
+retains at most 100,000 samples across the complete accepted-frame history.
+It is not a fused mesh or a trained Gaussian splat. Full RGB-D files are still
+recorded separately. Continuous video targets 24 FPS at nominal temperature,
+15 at fair, 10 at serious, and 6 at critical; these are targets, not achieved
+rate or visual-quality claims. Keep connected overlapping views and revisit
+corners at different heights instead of simply rotating faster.
+
 Other capture intents, RoomPlan, sensor details, and diagnostics are under
-**More options -> Capture details**; camera settings and optional World Studio
-pairing are in the same menu. No subject lock, RoomPlan session, or pairing is required to record
-a room. Frame-quality, thermal, and finalization checks still apply.
+**More options -> Capture details**. Camera settings and optional World Studio
+pairing are in the same menu. No subject lock, RoomPlan session, or pairing is
+required for rooms. Quality gates and finalization checks remain mandatory.
 
 Cloud world generation and an in-app finished-splat viewer are not connected.
 The review screen states that explicitly. The proposed first cloud trial and
