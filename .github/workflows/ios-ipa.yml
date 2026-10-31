@@ -1,0 +1,39 @@
+name: Build iPhone IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build unsigned iPhone app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project apps/ios/CaptureSplat/CaptureSplat.xcodeproj \
+            -scheme CaptureSplat \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/CaptureSplat.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
+          cd "$RUNNER_TEMP/package"
+          ditto -c -k --sequesterRsrc --keepParent Payload CaptureSplat-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CaptureSplat-unsigned-IPA
+          path: ${{ runner.temp }}/package/CaptureSplat-unsigned.ipa
+          if-no-files-found: error

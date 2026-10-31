@@ -11,6 +11,11 @@ Open `CaptureSplat.xcodeproj` in Xcode, select a physical iPhone, and run the
 identifier and your development team. The local file is ignored by Git, so
 device signing no longer dirties the shared Xcode project.
 
+For Windows sideloading, run the **Build iPhone IPA** workflow in GitHub
+Actions and download its `CaptureSplat-unsigned-IPA` artifact. The IPA is
+unsigned; use a Windows sideloading tool to sign it with your Apple account
+and install it on a connected iPhone.
+
 The simulator cannot validate camera, LiDAR, motion, or real capture timing.
 Use the [iPhone Xcode diagnostics](../../../docs/iphone_xcode_diagnostics.md)
 playbook for crash triage and the two-cycle physical-device stability smoke.
