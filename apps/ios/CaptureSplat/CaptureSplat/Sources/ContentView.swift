@@ -49,6 +49,7 @@ private enum ActiveSheet: String, Identifiable {
     case roomPlan
     case importSplat
     case splatViewer
+    case pcReconstruction
 
     var id: String { rawValue }
 }
@@ -68,6 +69,7 @@ struct ContentView: View {
     @State private var recordingBeganAt: Date?
     @State private var trainedSplatURL: URL?
     @State private var splatImportError: String?
+    @StateObject private var pcReconstruction = PCReconstructionClient()
 
     var body: some View {
         captureLifecycleView
@@ -181,6 +183,11 @@ struct ContentView: View {
         case .roomPlan: roomPlanCaptureSheet
         case .importSplat: importSplatSheet
         case .splatViewer: trainedSplatSheet
+        case .pcReconstruction:
+            PCReconstructionView(client: pcReconstruction, directory: reviewIsFinalized ? reviewDirectory : nil) { model in
+                trainedSplatURL = model
+                activeSheet = .splatViewer
+            }
         }
     }
 
@@ -243,12 +250,13 @@ struct ContentView: View {
                         Button("View room splat", systemImage: "cube.transparent") { activeSheet = .splatViewer }
                     }
                     Button("Open trained splat", systemImage: "square.and.arrow.down") { activeSheet = .importSplat }
+                    Button("Connect reconstruction PC", systemImage: "desktopcomputer") { activeSheet = .pcReconstruction }
                     Button("Capture details", systemImage: "slider.horizontal.3") {
                         selectedTab = .capture; isCapturePanelExpanded = true
                     }
                     Button("Camera settings", systemImage: "camera.aperture") { activeSheet = .camera }
                     Button("World Studio pairing", systemImage: "antenna.radiowaves.left.and.right") { activeSheet = .livePairing }
-                    Text("Version 0.1.4 (5)")
+                    Text("Version 0.1.5 (6)")
                 } label: {
                     Image(systemName: "ellipsis").frame(width: 44, height: 44)
                         .background(.ultraThinMaterial, in: Circle())
@@ -1227,6 +1235,13 @@ struct ContentView: View {
                 Image(systemName: reviewIsFinalized ? "checkmark.circle.fill" : "exclamationmark.triangle")
                     .font(.system(size: 64)).foregroundStyle(reviewIsFinalized ? .green : .orange)
                 Text(reviewIsFinalized ? "Scan saved" : "Scan needs attention").font(.title.bold())
+                if reviewIsFinalized {
+                    Button { activeSheet = .pcReconstruction } label: {
+                        Label("Create room splat", systemImage: "cube.transparent")
+                            .frame(maxWidth: .infinity, minHeight: 42)
+                    }
+                    .buttonStyle(.borderedProminent).tint(.cyan)
+                }
                 if let directory = reviewDirectory {
                     ShareLink(item: directory) {
                         Label(reviewIsFinalized ? "Export for training" : "Share partial scan", systemImage: "square.and.arrow.up")

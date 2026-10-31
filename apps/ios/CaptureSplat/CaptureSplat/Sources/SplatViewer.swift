@@ -109,7 +109,16 @@ private final class LocalSplatResources: NSObject, WKURLSchemeHandler {
         }
         guard let file else { task.didFailWithError(URLError(.fileDoesNotExist)); return }
         do {
-            let data = try Data(contentsOf: file, options: .mappedIfSafe)
+            var data = try Data(contentsOf: file, options: .mappedIfSafe)
+            if request.path == "/index.html",
+               let cameraData = try? Data(contentsOf: model.appendingPathExtension("camera.json")),
+               cameraData.count < 2048,
+               let camera = try? JSONSerialization.jsonObject(with: cameraData) as? [String: Any],
+               (camera["rotation"] as? [[Int]]) == [[1,0,0],[0,1,0],[0,0,1]],
+               let html = String(data: data, encoding: .utf8) {
+                let script = "<script>window.CAPTURE_SPLAT_CAMERA={id:0,width:1920,height:1440,fx:1100,fy:1100,position:[0,0,0],rotation:[[1,0,0],[0,1,0],[0,0,1]]};</script>"
+                data = Data(html.replacingOccurrences(of: "<script src=\"main.js\"", with: script + "<script src=\"main.js\"").utf8)
+            }
             guard data.count <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
             let response = HTTPURLResponse(url: request, statusCode: 200, httpVersion: "HTTP/1.1",
                                            headerFields: ["Content-Type": mime, "Content-Length": String(data.count),

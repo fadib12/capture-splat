@@ -25,7 +25,12 @@
     <string>_capturesplat._tcp</string>
   </array>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>Capture Splat discovers and securely pairs with the specific World Studio Mac selected by its short-lived QR.</string>
+  <string>Capture Splat sends saved scan images to the reconstruction PC you connect, and pairs with a selected World Studio desktop.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>Capture Splat records GNSS provenance for outdoor capture sessions.</string>
   <key>NSMotionUsageDescription</key>

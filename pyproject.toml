@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 brush = ["plyfile>=1.1.3"]
+pc = ["cryptography>=44"]
 vision = ["opencv-python>=4.8"]
 matting = ["transparent-background>=1.3.4"]
 apriltag = ["pupil-apriltags>=1.0.4.post11"]
