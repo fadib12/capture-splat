@@ -23,8 +23,9 @@ Capture and finalize locally, then open **Projects** and use **Manual Export**.
 That is the production iPhone-to-host path. World Studio live transfer is an
 optional experiment and is not required for reconstruction.
 
-The capture view defaults to **Guidance** in build 0.1.2 (3). Select **Camera**
-under Capture details to hide spatial overlays. On supported LiDAR iPhones it shows
+Build 0.1.3 (4) enables **Guidance** only while recording. Before Record and
+after Finish, overlays are hidden. Select **Camera** under Capture details to
+hide them during recording as well. On supported LiDAR iPhones it shows
 RealityKit scene-understanding wireframe plus a gravity-aligned map of the
 camera trail, observed surface cells, accepted-keyframe coverage, and heading.
 Switch to **Camera** to hide these inspection overlays without changing the
@@ -271,3 +272,38 @@ resolution or relax motion, exposure, tracking, feature, or parallax gates.
 Full-resolution source video and RGB-D sidecars remain the reconstruction
 input. Actual achieved FPS, drop counts, thermal behavior, and fixed-camera
 visual evidence still need physical-device validation on this build.
+
+## Recording lifecycle and thermal workload (0.1.3)
+
+The default room idle preview requests world tracking without scene depth,
+mesh reconstruction, plane detection, or person segmentation. An intent that
+requires an explicit pre-record depth lock retains scene depth in idle.
+Starting a capture enables the supported RGB-D, mesh, and person-mask features;
+these remain configured through finalization. Reconfiguration uses no tracking
+reset or anchor-removal options, preserving the ARKit world coordinate frame.
+The guidance renderer is independently gated on active recording. Failed or
+interrupted tracking is still reported explicitly.
+
+Opening capture review or backgrounding removes the capture camera view and
+pauses its AR session. Reopening capture creates a fresh idle session; this is
+not continuation of an earlier recording or trajectory. Optional RoomPlan and
+pairing remain separate explicit flows.
+
+The video target is now 20/12/8/4 FPS for nominal/fair/serious/critical thermal
+states. Preview grids use 64x48, 48x36, 32x24, or 24x18 samples respectively.
+Only preview sampling is reduced; raw RGB-D image/depth resolution and quality
+gates are unchanged. The app reports when it reduces the recording/preview
+workload. Reduced workload is not evidence of a particular temperature,
+throughput, battery-life, or quality improvement; these need device trials.
+
+Capture continues to use ARKit's supported primary camera. There is no 0.5x
+ultra-wide toggle: switching to another physical camera without the same
+supported calibrated poses/depth contract would invalidate the RGB-D input.
+A wider field of view is not by itself a higher-detail reconstruction. Full
+room coverage still requires translated, overlapping viewpoints, regardless
+of video FPS. No seconds-to-complete-room claim is made.
+
+Apple references:
+
+- [ARKit video-format camera selection](https://developer.apple.com/documentation/arkit/arconfiguration/videoformat-swift.class/capturedevicetype)
+- [Device temperature guidance](https://support.apple.com/en-ie/118431)

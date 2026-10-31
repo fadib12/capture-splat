@@ -13,21 +13,6 @@ struct ARCaptureView: UIViewRepresentable {
         let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         capture.attach(session: view.session)
 
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.worldAlignment = .gravity
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            configuration.frameSemantics.insert(.sceneDepth)
-        }
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
-            configuration.frameSemantics.insert(.personSegmentationWithDepth)
-        }
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
-            configuration.sceneReconstruction = .meshWithClassification
-        } else if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
-            configuration.sceneReconstruction = .mesh
-        }
-        configuration.planeDetection = [.horizontal, .vertical]
-        view.session.run(configuration)
         context.coordinator.update(view: view, capture: capture)
         return view
     }
@@ -43,8 +28,35 @@ struct ARCaptureView: UIViewRepresentable {
 
     final class Coordinator {
         private let renderer = SpatialGuidanceRenderer()
+        private var lastUsesCaptureSensors: Bool?
+        private var lastUsesDepth: Bool?
 
         func update(view: ARView, capture: CaptureController) {
+            let policy = capture.runtimePolicy
+            if lastUsesCaptureSensors != policy.usesCaptureSensors || lastUsesDepth != policy.usesDepth {
+                let configuration = ARWorldTrackingConfiguration()
+                configuration.worldAlignment = .gravity
+                if policy.usesDepth,
+                   ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                    configuration.frameSemantics.insert(.sceneDepth)
+                }
+                if policy.usesCaptureSensors {
+                    if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+                        configuration.frameSemantics.insert(.personSegmentationWithDepth)
+                    }
+                    if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+                        configuration.sceneReconstruction = .meshWithClassification
+                    } else if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+                        configuration.sceneReconstruction = .mesh
+                    }
+                    configuration.planeDetection = [.horizontal, .vertical]
+                }
+                // Keep the same world tracking frame when enabling capture features.
+                // No resetTracking or removeExistingAnchors option is used.
+                view.session.run(configuration)
+                lastUsesCaptureSensors = policy.usesCaptureSensors
+                lastUsesDepth = policy.usesDepth
+            }
             renderer.update(view: view, capture: capture)
         }
 
@@ -58,8 +70,8 @@ struct ARCaptureView: UIViewRepresentable {
         private var lastShowsFeatures = false
 
         func update(view: ARView, capture: CaptureController) {
-            let showsMesh = capture.spatialGuidanceShowsMesh
-            let showsFeatures = capture.isSpatialGuidanceVisible
+            let showsMesh = capture.isRecording && capture.spatialGuidanceShowsMesh
+            let showsFeatures = capture.isRecording && capture.isSpatialGuidanceVisible
                 && capture.spatialGuidanceFaceBudget > 0
                 && !showsMesh
                 && capture.spatialGuidanceMode != "depth_points"

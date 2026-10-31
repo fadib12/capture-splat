@@ -278,7 +278,8 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var roomPlanFile: URL?
     @Published var roomPlanReportFile: URL?
     @Published var roomPlanSemanticsFile: URL?
-    @Published var isSpatialGuidanceVisible = true
+    @Published private(set) var isSpatialGuidanceVisible = false
+    private var spatialGuidanceRequested = true
     @Published private(set) var spatialGuidanceMode = "pose_only"
     @Published private(set) var spatialGuidanceStatus = "RGB tracking"
     @Published private(set) var spatialGuidanceFaceBudget = 0
@@ -565,12 +566,23 @@ final class CaptureController: NSObject, ObservableObject {
         requiresSubjectTarget && isObjectMaskEnabled && objectExtentOverlay != nil
     }
 
+    var runtimePolicy: CaptureRuntimePolicy {
+        let phase: CaptureRuntimePhase = isFinalizing ? .finalizing
+            : (isRecording ? .recording : (isStarting ? .starting : .idle))
+        return CaptureRuntimePolicy(
+            phase: phase,
+            needsDepthLock: requiresSubjectTarget || scanTargetMode == "room",
+            guidanceRequested: spatialGuidanceRequested
+        )
+    }
+
     func setSpatialGuidanceVisible(_ visible: Bool) {
-        isSpatialGuidanceVisible = visible
+        spatialGuidanceRequested = visible
         refreshSpatialGuidanceCapability()
     }
 
     private func refreshSpatialGuidanceCapability() {
+        isSpatialGuidanceVisible = runtimePolicy.showsGuidance
         let supportsMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
         let supportsDepth = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
         let supportsPlanes = session != nil
@@ -963,6 +975,7 @@ final class CaptureController: NSObject, ObservableObject {
             imuRateSamples.removeAll()
             gpsRateSamples.removeAll()
             isRecording = true
+            refreshSpatialGuidanceCapability()
             lastSpatialGuidancePolicy = ""
             applySpatialGuidanceThermalPolicy(ProcessInfo.processInfo.thermalState)
             capturePackageState = .recording
@@ -1011,6 +1024,7 @@ final class CaptureController: NSObject, ObservableObject {
         spatialGuidanceCaptureEndUptime = stoppedAt
         isRecording = false
         isFinalizing = true
+        refreshSpatialGuidanceCapability()
         capturePackageState = .finalizing
         statusText = automaticStopReason == "frame_limit"
             ? "Useful-frame limit reached. Finalizing capture"
@@ -2263,13 +2277,13 @@ final class CaptureController: NSObject, ObservableObject {
     private func videoTargetFPS(for state: ProcessInfo.ThermalState) -> Double {
         switch state {
         case .nominal:
-            return 24
+            return 20
         case .fair:
-            return 15
+            return 12
         case .serious:
-            return 10
+            return 8
         case .critical:
-            return 6
+            return 4
         @unknown default:
             return 10
         }
@@ -2385,6 +2399,7 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     private func spatialGuidanceMeshPauseReason(policy: String, thermalState: String) -> String {
+        guard isRecording else { return "capture_not_recording" }
         guard isSpatialGuidanceVisible else { return "guidance_hidden_by_user" }
         guard spatialGuidanceMode == "lidar_mesh" || spatialGuidanceMode == "roomplan_shared" else {
             return "mesh_unavailable_for_capability_mode"
@@ -5379,8 +5394,16 @@ extension CaptureController: ARSessionDelegate {
         }
         // Fail closed when a supplied confidence map cannot be read.
         guard confidenceMap == nil || confidenceBase != nil else { return [] }
-        let columns = min(width, 64)
-        let rows = min(height, 48)
+        let previewColumns: Int
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: previewColumns = 64
+        case .fair: previewColumns = 48
+        case .serious: previewColumns = 32
+        case .critical: previewColumns = 24
+        @unknown default: previewColumns = 32
+        }
+        let columns = min(width, previewColumns)
+        let rows = min(height, previewColumns * 3 / 4)
         var samples: [[String: Any]] = []
         samples.reserveCapacity(columns * rows)
 
@@ -5442,6 +5465,8 @@ extension CaptureController: ARSessionDelegate {
             "source_sample_count": pointCloudPreview.totalSeen,
             "sampling_method": "deterministic_reservoir_across_accepted_frames",
             "samples_per_frame_limit": 3072,
+            "thermal_adaptive_sampling": true,
+            "thermal_sample_grids": ["nominal": [64, 48], "fair": [48, 36], "serious": [32, 24], "critical": [24, 18]],
             "minimum_depth_confidence": "medium_when_available",
             "confidence_unavailable_policy": "finite_in_range_depth_only",
             "depth_range_meters": [0.15, 6.0],

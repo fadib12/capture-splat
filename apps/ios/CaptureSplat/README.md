@@ -12,19 +12,24 @@ preview when available and choose **Export Scan**, or use **My Scans** later.
 Capture records video, quality-gated RGB-D keyframes, and camera metadata;
 generating the Gaussian splat still happens on the host computer.
 
-The camera-first screen in **0.1.2 (3)** enables Guidance by default: live ARKit
+The camera-first screen in **0.1.3 (4)** shows Guidance only while recording: live ARKit
 wireframe, an observed-layout map, tracking state, and actual capture hold
 reasons. Video frames, accepted useful views, and sampled preview points are
-reported separately. A wireframe means ARKit observed a surface; brighter map
+reported separately. Idle preview requests no mesh/person-segmentation capture
+features; depth remains available for an explicit subject/room lock. Those
+features stay active through finalization, and review releases the camera.
+A wireframe means ARKit observed a surface; brighter map
 cells mean an accepted view was nearby, not that a surface is fully captured.
 Thermal downgrades are shown and retained in the capture evidence.
 
 The review preview samples up to 64 x 48 depth positions per accepted frame,
 rejects invalid/out-of-range depth and low confidence when available, and
 retains at most 100,000 samples across the complete accepted-frame history.
+Preview grids also shrink as thermal pressure increases; raw RGB-D resolution
+and capture-quality gates are preserved.
 It is not a fused mesh or a trained Gaussian splat. Full RGB-D files are still
-recorded separately. Continuous video targets 24 FPS at nominal temperature,
-15 at fair, 10 at serious, and 6 at critical; these are targets, not achieved
+recorded separately. Continuous video targets 20 FPS at nominal temperature,
+12 at fair, 8 at serious, and 4 at critical; these are targets, not achieved
 rate or visual-quality claims. Keep connected overlapping views and revisit
 corners at different heights instead of simply rotating faster.
 

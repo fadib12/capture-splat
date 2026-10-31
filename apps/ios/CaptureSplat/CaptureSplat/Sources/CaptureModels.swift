@@ -274,3 +274,18 @@ struct BoundedPreviewReservoir<Element> {
         }
     }
 }
+
+/// The idle camera does not need the expensive recording sensor configuration.
+enum CaptureRuntimePhase {
+    case idle, starting, recording, finalizing
+}
+
+struct CaptureRuntimePolicy {
+    let phase: CaptureRuntimePhase
+    let needsDepthLock: Bool
+    let guidanceRequested: Bool
+
+    var usesCaptureSensors: Bool { phase != .idle }
+    var usesDepth: Bool { usesCaptureSensors || needsDepthLock }
+    var showsGuidance: Bool { phase == .recording && guidanceRequested }
+}

@@ -68,7 +68,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             if activeSheet != .livePairing {
-                if selectedTab == .capture {
+                if selectedTab == .capture, activeSheet != .review, scenePhase == .active {
                     ARCaptureView()
                         .ignoresSafeArea()
                 } else {
@@ -78,7 +78,7 @@ struct ContentView: View {
                 Color.black.ignoresSafeArea()
             }
 
-            if selectedTab == .capture, viewMode == .guidance {
+            if selectedTab == .capture, capture.isSpatialGuidanceVisible, viewMode == .guidance {
                 if isCapturePanelExpanded {
                     scanGuidanceOverlay
                 } else {
@@ -169,7 +169,7 @@ struct ContentView: View {
                                 Text(began, style: .timer).monospacedDigit()
                             }
                         } else {
-                            Text("Room Scan ? 0.1.2 (3)")
+                            Text("Room Scan ? 0.1.3 (4)")
                         }
                     }
                     .font(.caption)
@@ -324,6 +324,11 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if capture.isRecording {
+                    if capture.thermalStateText != "nominal" && capture.thermalStateText != "--" {
+                        Label("Phone warming: reducing video and preview workload", systemImage: "thermometer.medium")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     HStack {
                         Text("\(capture.acceptedKeyframes) useful views")
                         Spacer()
@@ -335,7 +340,7 @@ struct ContentView: View {
                 if capture.requiresSubjectTarget {
                     compactIntentAndTargetControls
                 }
-                if capture.captureBlockerStatus != "Clear" {
+                if capture.isRecording, capture.captureBlockerStatus != "Clear" {
                     Label(capture.captureBlockerStatus, systemImage: "hand.raised")
                         .font(.caption)
                         .foregroundStyle(captureBlockerColor)
