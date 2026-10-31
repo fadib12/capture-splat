@@ -27,13 +27,21 @@ jobs:
 
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/CaptureSplat.app"
           test -d "$APP_PATH"
+          /usr/libexec/PlistBuddy -c "Add :CaptureSplatBuildCommit string $GITHUB_SHA" "$APP_PATH/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.1"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "2"
           mkdir -p "$RUNNER_TEMP/package/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
           cd "$RUNNER_TEMP/package"
           ditto -c -k --sequesterRsrc --keepParent Payload CaptureSplat-unsigned.ipa
+          shasum -a 256 CaptureSplat-unsigned.ipa > CaptureSplat-unsigned.ipa.sha256
+          printf '%s\n' "$GITHUB_SHA" > source-commit.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: CaptureSplat-unsigned-IPA
-          path: ${{ runner.temp }}/package/CaptureSplat-unsigned.ipa
+          path: |
+            ${{ runner.temp }}/package/CaptureSplat-unsigned.ipa
+            ${{ runner.temp }}/package/CaptureSplat-unsigned.ipa.sha256
+            ${{ runner.temp }}/package/source-commit.txt
           if-no-files-found: error

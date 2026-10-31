@@ -5,7 +5,6 @@ import SwiftUI
 
 private enum WorkspaceTab: String, CaseIterable, Identifiable {
     case capture = "Capture"
-    case reconstruct = "Reconstruct"
     case projects = "Projects"
 
     var id: String { rawValue }
@@ -58,32 +57,39 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: WorkspaceTab = .capture
     @State private var scanMode: ScanMode = .video3DGS
-    @State private var viewMode: ScanViewMode = .guidance
+    @State private var viewMode: ScanViewMode = .camera
     @State private var isCapturePanelExpanded = false
     @State private var activeSheet: ActiveSheet?
     @State private var captureLibrary: [CaptureLibraryItem] = []
     @State private var selectedCaptureID: String?
     @State private var reviewCaptureID: String?
+    @State private var recordingBeganAt: Date?
 
     var body: some View {
         ZStack {
             if activeSheet != .livePairing {
-                ARCaptureView()
-                    .ignoresSafeArea()
+                if selectedTab == .capture {
+                    ARCaptureView()
+                        .ignoresSafeArea()
+                } else {
+                    Color.black.ignoresSafeArea()
+                }
             } else {
                 Color.black.ignoresSafeArea()
             }
 
             if selectedTab == .capture, viewMode == .guidance {
-                scanGuidanceOverlay
+                if isCapturePanelExpanded {
+                    scanGuidanceOverlay
+                } else {
+                    roomScanGuidanceOverlay
+                }
             }
 
             VStack(spacing: 12) {
                 topBar
                 Spacer()
-                if selectedTab == .reconstruct {
-                    reconstructionPanel
-                } else if selectedTab == .projects {
+                if selectedTab == .projects {
                     projectPanel
                 }
                 if selectedTab == .capture {
@@ -116,6 +122,16 @@ struct ContentView: View {
                 refreshCaptureLibrary()
             }
         }
+        .onChange(of: capture.isRecording) { _, recording in
+            recordingBeganAt = recording ? Date() : nil
+        }
+        .onChange(of: capture.isFinalizing) { _, finalizing in
+            if !finalizing, capture.capturePackageState == .ready {
+                refreshCaptureLibrary()
+                reviewCaptureID = capture.currentSessionDirectory?.path
+                activeSheet = .review
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 refreshCaptureLibrary()
@@ -123,6 +139,7 @@ struct ContentView: View {
                 livePairing.handleBackgrounding()
             }
         }
+        .preferredColorScheme(.dark)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .export:
@@ -140,39 +157,72 @@ struct ContentView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 10) {
-            Picker("Workspace", selection: $selectedTab) {
-                ForEach(WorkspaceTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(selectedTab == .capture ? "Capture Splat" : "My Scans")
+                    .font(.title2.weight(.bold))
+                if selectedTab == .capture {
+                    HStack(spacing: 6) {
+                        if capture.isRecording {
+                            Circle().fill(.red).frame(width: 7, height: 7)
+                            if let began = recordingBeganAt {
+                                Text(began, style: .timer).monospacedDigit()
+                            }
+                        } else {
+                            Text("Room Scan ? 0.1.1 (2)")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
-            .pickerStyle(.segmented)
+            Spacer()
+            Button {
+                selectedTab = selectedTab == .capture ? .projects : .capture
+            } label: {
+                Image(systemName: selectedTab == .capture ? "square.stack" : "camera")
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(selectedTab == .capture ? "My scans" : "New scan")
             .disabled(capture.isRecording || capture.isStarting || capture.isFinalizing)
 
-            Button {
-                activeSheet = .livePairing
+            Menu {
+                Button("Capture details", systemImage: "slider.horizontal.3") {
+                    selectedTab = .capture
+                    isCapturePanelExpanded = true
+                }
+                Button("Camera settings", systemImage: "camera.aperture") {
+                    activeSheet = .camera
+                }
+                Button("World Studio pairing", systemImage: "antenna.radiowaves.left.and.right") {
+                    activeSheet = .livePairing
+                }
             } label: {
-                Image(systemName: livePairing.snapshot.hasCurrentPairing
-                    ? "antenna.radiowaves.left.and.right"
-                    : "antenna.radiowaves.left.and.right.slash")
+                Image(systemName: "ellipsis")
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
             }
-            .buttonStyle(.bordered)
             .disabled(capture.isRecording || capture.isStarting || capture.isFinalizing)
-            .accessibilityLabel("World Studio pairing")
-
-            Button {
-                activeSheet = .camera
-            } label: {
-                Image(systemName: "camera.aperture")
-            }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Camera settings")
+            .accessibilityLabel("More options")
         }
-        .padding(8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .foregroundStyle(.white)
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
     }
 
+    @ViewBuilder
     private var capturePanel: some View {
+        if isCapturePanelExpanded {
+            captureDetailsPanel
+        } else {
+            compactCapturePanel
+                .frame(maxWidth: 560)
+        }
+    }
+
+    private var captureDetailsPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             capturePanelHeader
 
@@ -232,7 +282,7 @@ struct ContentView: View {
                 .fill(.secondary.opacity(0.45))
                 .frame(width: 44, height: 4)
                 .accessibilityHidden(true)
-            Text(isCapturePanelExpanded ? "Scan Details" : capture.targetLockStatus)
+            Text(isCapturePanelExpanded ? "Scan Details" : "\(capture.currentCaptureIntentOption.shortTitle) Scan")
                 .font(.caption)
                 .fontWeight(.semibold)
                 .lineLimit(1)
@@ -243,7 +293,8 @@ struct ContentView: View {
                     isCapturePanelExpanded.toggle()
                 }
             } label: {
-                Image(systemName: isCapturePanelExpanded ? "chevron.down" : "chevron.up")
+                Label(isCapturePanelExpanded ? "Done" : "Advanced",
+                      systemImage: isCapturePanelExpanded ? "chevron.down" : "slider.horizontal.3")
             }
             .buttonStyle(.bordered)
             .accessibilityLabel(isCapturePanelExpanded ? "Collapse scan details" : "Expand scan details")
@@ -251,88 +302,106 @@ struct ContentView: View {
     }
 
     private var compactCapturePanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Video 3DGS Max", systemImage: "video")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                Spacer()
-                Text(capture.targetLockStatus)
-                    .font(.caption2)
-                    .foregroundStyle(targetLockColor)
-                    .lineLimit(1)
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    compactIntentAndTargetControls
-                    compactRoomPlanButton
-                    compactRecordButton
-                }
-                VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        compactIntentAndTargetControls
-                    }
-                    HStack(spacing: 8) {
-                        compactRoomPlanButton
-                        compactRecordButton
+        VStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(capture.isRecording ? "Your scan" : "Scan your room", systemImage: "viewfinder")
+                        .font(.headline)
+                    Spacer()
+                    if capture.isRecording {
+                        Text("\(capture.recordedVideoFrames) video frames")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
                     }
                 }
-            }
+                Text(capture.captureIntent == "room_walkthrough"
+                    ? (capture.isRecording
+                        ? "Move slowly. Sweep high to low. Revisit corners from different angles."
+                        : "Walk around your room, keeping walls and furniture in view.")
+                    : capture.currentCaptureIntentOption.guidance)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            captureCompletionBanner
-
-            HStack(spacing: 8) {
-                Label(capture.nextAction, systemImage: readinessIcon)
-                    .foregroundStyle(readinessColor)
-                    .fontWeight(.semibold)
-                Spacer()
-                Text(capture.coverageDisplayCountText)
-                    .monospacedDigit()
                 if capture.requiresSubjectTarget {
-                    Text(capture.targetLockDistanceText)
+                    compactIntentAndTargetControls
+                }
+                if capture.captureBlockerStatus != "Clear" {
+                    Label(capture.captureBlockerStatus, systemImage: "hand.raised")
+                        .font(.caption)
+                        .foregroundStyle(captureBlockerColor)
+                    Text(capture.captureBlockerDetail)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if capture.isStarting || capture.isFinalizing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(capture.isStarting ? "Starting capture..." : "Saving on your iPhone...")
+                            .font(.caption)
+                    }
+                } else if !capture.isRecording {
+                    Text(capture.statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                captureCompletionBanner
+
+                if let directory = capture.currentSessionDirectory,
+                   capture.isCapturePackageReady || capture.hasRecoverablePartialCapture {
+                    HStack(spacing: 16) {
+                        Button {
+                            reviewCaptureID = nil
+                            activeSheet = .review
+                        } label: {
+                            Label("Review Scan", systemImage: "cube.transparent")
+                        }
+                        ShareLink(item: directory) {
+                            Label(capture.isCapturePackageReady ? "Export Scan" : "Share Partial",
+                                  systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .disabled(capture.isRecording || capture.isStarting || capture.isFinalizing)
                 }
             }
-            .font(.caption)
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
 
-            coverageStrip
-
-            if scanMode == .roomWalk {
-                HStack(spacing: 8) {
-                    Label(capture.colmapCoachAction, systemImage: "camera.metering.matrix")
-                        .foregroundStyle(colmapCoachColor)
-                    Spacer()
-                    Text(capture.colmapFeatureText)
-                        .foregroundStyle(.secondary)
-                }
-                .font(.caption2)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            } else if scanMode == .video3DGS {
-                HStack(spacing: 8) {
-                    Label(capture.captureProfileText, systemImage: "video")
-                        .foregroundStyle(.cyan)
-                    Spacer()
-                    Text("\(capture.acceptedKeyframes) kept")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.caption2)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            }
-
-            if capture.captureBlockerStatus != "Clear" {
-                Label(capture.captureBlockerStatus, systemImage: "hand.raised")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(captureBlockerColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+            VStack(spacing: 7) {
+                compactRecordButton
+                Text(capture.isRecording ? "Finish" : recordButtonTitle)
+                    .font(.subheadline.weight(.semibold))
             }
         }
+        .foregroundStyle(.white)
+        .padding(.bottom, 8)
+    }
+
+    private var roomScanGuidanceOverlay: some View {
+        VStack {
+            HStack {
+                SpatialGuidanceMiniMap(
+                    mode: capture.spatialGuidanceStatus,
+                    cells: capture.spatialGuidanceCells,
+                    path: capture.spatialGuidancePath,
+                    pose: capture.spatialGuidancePose
+                )
+                Spacer()
+            }
+            if let notice = capture.spatialGuidanceThermalNotice {
+                Label(notice, systemImage: "thermometer.sun")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(8)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+            Spacer()
+        }
+        .padding(.top, 76)
+        .padding(.horizontal, 14)
+        .allowsHitTesting(false)
     }
 
     private var scanModeControls: some View {
@@ -422,16 +491,31 @@ struct ContentView: View {
         Button {
             capture.isRecording ? capture.stopRecording() : capture.startRecording()
         } label: {
-            Label(recordButtonTitle, systemImage: recordButtonIcon)
+            ZStack {
+                Circle().stroke(.white.opacity(0.85), lineWidth: 3)
+                if capture.isRecording {
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(.red)
+                        .frame(width: 32, height: 32)
+                } else if capture.isStarting || capture.isFinalizing {
+                    ProgressView().tint(.white)
+                } else {
+                    Circle().fill(.white).padding(7)
+                }
+            }
+            .frame(width: 80, height: 80)
+            .background(.black.opacity(0.25), in: Circle())
+            .contentShape(Circle())
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.plain)
         .disabled(
             capture.isStarting || capture.isFinalizing || !capture.isRGBEnabled || !capture.isDepthEnabled
                 || (!capture.isRecording && !canRecordCurrentMode)
         )
+        .accessibilityLabel(capture.isRecording ? "Finish scan" : recordButtonTitle)
         .accessibilityHint(capture.requiresSubjectTarget && !capture.isObjectTargetLocked
             ? "Lock the centered subject before starting Object Orbit capture"
-            : "Starts or stops the Video 3DGS capture")
+            : "Start scanning, or finish and save your scan on this iPhone")
     }
 
     private var recordExportControls: some View {
@@ -1015,33 +1099,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var reconstructionPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Reconstruction", systemImage: "cube.transparent")
-                    .font(.headline)
-                Spacer()
-                Text(capturePackageStatus)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.thinMaterial, in: Capsule())
-            }
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                stageCard("Capture Bundle", state: capture.isCapturePackageReady ? "Ready" : capturePackageStatus, icon: "folder")
-                stageCard("Point Cloud + LAS", state: "Mac Gate", icon: "point.3.connected.trianglepath.dotted")
-                stageCard("COLMAP Bridge", state: "Converter Ready", icon: "camera.metering.matrix")
-                stageCard("Nerfstudio", state: "Parser Gate", icon: "film.stack")
-                stageCard("3DGS", state: "Not Started", icon: "sparkles")
-                stageCard("3DGS Viewer", state: "Preview", icon: "display")
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: 560)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
     private var projectPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -1129,10 +1186,9 @@ struct ContentView: View {
                                 reviewCaptureID = item.id
                                 activeSheet = .review
                             } label: {
-                                Label("LiDAR Preview", systemImage: "cube.transparent")
+                                Label("Review Scan", systemImage: "cube.transparent")
                             }
                             .buttonStyle(.bordered)
-                            .disabled(item.pointCloudPointCount == 0)
                         }
 
                         HStack {
@@ -1196,30 +1252,67 @@ struct ContentView: View {
 
     private var pointCloudReviewSheet: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 10) {
-                if let url = reviewPointCloudURL, reviewPointCloudCount > 0 {
-                    PointCloudPreviewScene(url: url)
-                        .frame(minHeight: 360)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    Text("\(reviewPointCloudCount) sampled LiDAR points")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "cube.transparent")
-                            .font(.largeTitle)
-                        Text("No preview points yet")
-                            .font(.headline)
-                        Text("Record accepted RGB-D keyframes before opening the LiDAR preview.")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let url = reviewPointCloudURL, reviewPointCloudCount > 0 {
+                        PointCloudPreviewScene(url: url)
+                            .frame(minHeight: 360)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        Text("\(reviewPointCloudCount) sampled LiDAR points")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        VStack(spacing: 10) {
+                            Image(systemName: "cube.transparent")
+                                .font(.largeTitle)
+                            Text("Preview unavailable")
+                                .font(.headline)
+                            Text("This scan has no LiDAR preview. Its saved files can still be exported for inspection.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 360)
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label(reviewIsFinalized ? "Saved on this iPhone" : "Incomplete scan",
+                              systemImage: reviewIsFinalized ? "checkmark.circle.fill" : "exclamationmark.triangle")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(reviewIsFinalized ? .green : .orange)
+
+                        Text("Drag to look around. Pinch to zoom. This is a capture preview; the Gaussian splat has not been generated.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+
+                        if let item = reviewLibraryCapture, item.state != .ready {
+                            Text(item.statusDetail)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+
+                        if let directory = reviewDirectory {
+                            ShareLink(item: directory) {
+                                Label(reviewIsFinalized ? "Export Scan" : "Share Partial Scan",
+                                      systemImage: "square.and.arrow.up")
+                                    .frame(maxWidth: .infinity, minHeight: 32)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.cyan)
+                            .disabled(capture.isRecording || capture.isStarting || capture.isFinalizing)
+                        }
+
+                        Label("Cloud generation is not connected", systemImage: "cloud.slash")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Your scan is saved. Creating and opening a finished world here needs a connected generation service.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 360)
+                    .padding(16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
                 }
+                .padding()
             }
-            .padding()
-            .navigationTitle("LiDAR Preview")
+            .navigationTitle("Review your scan")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -1395,11 +1488,31 @@ struct ContentView: View {
     }
 
     private var reviewPointCloudURL: URL? {
-        reviewLibraryCapture?.pointCloudPreviewFile ?? capture.pointCloudPreviewFile
+        if reviewCaptureID != nil {
+            return reviewLibraryCapture?.pointCloudPreviewFile
+        }
+        return capture.pointCloudPreviewFile
     }
 
     private var reviewPointCloudCount: Int {
-        reviewLibraryCapture?.pointCloudPointCount ?? capture.pointCloudPreviewPointCount
+        if reviewCaptureID != nil {
+            return reviewLibraryCapture?.pointCloudPointCount ?? 0
+        }
+        return capture.pointCloudPreviewPointCount
+    }
+
+    private var reviewDirectory: URL? {
+        if reviewCaptureID != nil {
+            return reviewLibraryCapture?.directory
+        }
+        return capture.currentSessionDirectory
+    }
+
+    private var reviewIsFinalized: Bool {
+        if reviewCaptureID != nil {
+            return reviewLibraryCapture?.state == .ready
+        }
+        return capture.isCapturePackageReady
     }
 
     private func refreshCaptureLibrary() {

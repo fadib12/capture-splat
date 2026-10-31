@@ -246,7 +246,8 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var lastAcceptedViewHint = "No accepted view yet."
     @Published var captureProfileText = "RGB-D keyframes"
     @Published var captureProfileDetail = "Quality-gated RGB, depth, pose, IMU, and GNSS bundle."
-    @Published var captureIntent = "scene_cluster"
+    @Published var recordedVideoFrames = 0
+    @Published var captureIntent = "room_walkthrough"
     @Published var hapticAcceptedCount = 0
     @Published var currentCoverageSector = 0
     @Published var targetCoverageSector = 0
@@ -852,6 +853,7 @@ final class CaptureController: NSObject, ObservableObject {
             scheduledFrameCount = 0
             isWritingFrame = false
             rgbFrames = 0
+            recordedVideoFrames = 0
             depthFrames = 0
             imuRows = 0
             accumulatedIMURows = 0
@@ -5037,6 +5039,7 @@ extension CaptureController: ARSessionDelegate {
         let shouldRefreshLiveGuidance = frame.timestamp - lastLiveGuidanceTimestamp >= guidanceInterval
         if shouldRefreshLiveGuidance {
             lastLiveGuidanceTimestamp = frame.timestamp
+            recordedVideoFrames = videoRecorder.appendedFrameCount
             updateSpatialGuidancePose(from: frame)
         }
         guard let sceneDepth = frame.sceneDepth else {

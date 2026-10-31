@@ -2,6 +2,31 @@
 
 Capture Splat is a native iPhone capture app for recording Video 3DGS input. It writes `capture_splat.v0.3` export folders for the host pipeline in this repository.
 
+## Quick room scan
+
+The app opens in Room Scan with the Room Walkthrough intent already selected.
+Tap the circular **Record** control, walk a slow connected path around the room
+with overlapping views of corners and furniture, then tap **Finish**. Wait for
+saving to finish; **Review your scan** opens automatically. Inspect the LiDAR
+preview when available and choose **Export Scan**, or use **My Scans** later.
+Capture records video, quality-gated RGB-D keyframes, and camera metadata;
+generating the Gaussian splat still happens on the host computer.
+
+The camera-first screen starts with a clear camera view, elapsed recording time,
+recorded video-frame count, capture guidance, and the record control. Build
+0.1.1 (2) is shown on the idle screen so it can be distinguished from old IPAs.
+Guidance overlays and the map remain available in Capture details.
+Coverage is capture guidance, not proof that the whole room is reconstructed.
+Other capture intents, RoomPlan, sensor details, and diagnostics are under
+**More options -> Capture details**; camera settings and optional World Studio
+pairing are in the same menu. No subject lock, RoomPlan session, or pairing is required to record
+a room. Frame-quality, thermal, and finalization checks still apply.
+
+Cloud world generation and an in-app finished-splat viewer are not connected.
+The review screen states that explicitly. The proposed first cloud trial and
+the remaining World Studio backend work are described in
+[Mobile cloud generation](../../../docs/mobile_cloud_generation.md).
+
 ## Build
 
 Open `CaptureSplat.xcodeproj` in Xcode, select a physical iPhone, and run the

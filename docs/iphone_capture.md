@@ -9,11 +9,22 @@ Use **Video 3DGS Max** for training input. The app records quality-gated RGB-D
 keyframes plus a continuous HEVC video and timestamped ARKit pose/intrinsics
 index. It does not train 3DGS on-device.
 
+The default camera screen preselects Room Walkthrough. Tap the circular
+**Record** control, walk a slow connected loop with overlapping views, and tap
+**Finish**. After saving, **Review your scan** opens automatically; inspect the
+LiDAR preview when available and choose **Export Scan**. There is no subject-lock
+step for rooms. Other intents and capture diagnostics are available under
+**More options -> Capture details**; camera settings and optional pairing are in
+the same menu. The small map is
+coverage guidance, not proof of a complete room or finished Gaussian splat.
+Cloud generation is not connected; see [the cloud proposal](mobile_cloud_generation.md).
+
 Capture and finalize locally, then open **Projects** and use **Manual Export**.
 That is the production iPhone-to-host path. World Studio live transfer is an
 optional experiment and is not required for reconstruction.
 
-The capture view defaults to **Guidance**. On supported LiDAR iPhones it shows
+The capture view defaults to **Camera** in build 0.1.1 (2), keeping the live
+preview clear. Select **Guidance** under Capture details for spatial overlays. On supported LiDAR iPhones it shows
 RealityKit scene-understanding wireframe plus a gravity-aligned map of the
 camera trail, observed surface cells, accepted-keyframe coverage, and heading.
 Switch to **Camera** to hide these inspection overlays without changing the
