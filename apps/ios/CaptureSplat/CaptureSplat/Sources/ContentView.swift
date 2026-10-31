@@ -225,6 +225,7 @@ struct ContentView: View {
                 if capture.isRecording {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     if let began = recordingBeganAt { Text(began, style: .timer).monospacedDigit() }
+                    Text(capture.cameraResolutionLabel).font(.caption.weight(.semibold))
                 } else {
                     Text(selectedTab == .capture ? "Capture Splat" : "My Scans").fontWeight(.semibold)
                 }
@@ -256,7 +257,7 @@ struct ContentView: View {
                     }
                     Button("Camera settings", systemImage: "camera.aperture") { activeSheet = .camera }
                     Button("World Studio pairing", systemImage: "antenna.radiowaves.left.and.right") { activeSheet = .livePairing }
-                    Text("Version 0.1.5 (6)")
+                    Text("Version 0.1.6 (7)")
                 } label: {
                     Image(systemName: "ellipsis").frame(width: 44, height: 44)
                         .background(.ultraThinMaterial, in: Circle())
@@ -370,7 +371,7 @@ struct ContentView: View {
                     Text(capture.statusText).font(.caption).foregroundStyle(.orange)
                 }
                 if capture.requiresSubjectTarget { compactIntentAndTargetControls }
-                Text(capture.cameraLensLabel)
+                Text(capture.cameraLensLabel + " | " + capture.cameraResolutionLabel)
                     .font(.caption.weight(.semibold))
                     .padding(10).background(.ultraThinMaterial, in: Capsule())
             }

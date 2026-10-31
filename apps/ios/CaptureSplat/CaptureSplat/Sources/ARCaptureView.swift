@@ -30,20 +30,43 @@ struct ARCaptureView: UIViewRepresentable {
         private let renderer = SpatialGuidanceRenderer()
         private var lastUsesCaptureSensors: Bool?
         private var lastUsesDepth: Bool?
+        private var lastUsesCaptureVideoFormat: Bool?
+        private var captureVideoFormat: ARConfiguration.VideoFormat?
 
         func update(view: ARView, capture: CaptureController) {
             let policy = capture.runtimePolicy
-            if lastUsesCaptureSensors != policy.usesCaptureSensors || lastUsesDepth != policy.usesDepth {
+            let usesCaptureVideoFormat = capture.isStarting || capture.isRecording || capture.isFinalizing
+            if lastUsesCaptureSensors != policy.usesCaptureSensors
+                || lastUsesDepth != policy.usesDepth
+                || lastUsesCaptureVideoFormat != usesCaptureVideoFormat {
                 let configuration = ARWorldTrackingConfiguration()
                 configuration.worldAlignment = .gravity
-                // Only use an ultra-wide physical camera exposed by this exact
-                // ARKit configuration. Never fake 0.5x with a crop or lose depth.
-                let ultraWide = ARWorldTrackingConfiguration.supportedVideoFormats
-                    .filter { $0.captureDeviceType == .builtInUltraWideCamera && $0.captureDevicePosition == .back }
-                    .max { $0.imageResolution.width * $0.imageResolution.height
-                        < $1.imageResolution.width * $1.imageResolution.height }
-                if let ultraWide { configuration.videoFormat = ultraWide }
-                capture.selectCaptureCamera(configuration.videoFormat)
+                let rearFormats = ARWorldTrackingConfiguration.supportedVideoFormats
+                    .filter { $0.captureDevicePosition == .back }
+                let fourKFormats = rearFormats.filter { format in
+                    max(format.imageResolution.width, format.imageResolution.height) >= 3840
+                        && min(format.imageResolution.width, format.imageResolution.height) >= 2160
+                }
+                if usesCaptureVideoFormat {
+                    // Lock one supported format for the whole recording and finalization.
+                    // The video writer's dimensions must not change under thermal pressure.
+                    if captureVideoFormat == nil {
+                        captureVideoFormat = preferredCaptureFormat(
+                            rearFormats: rearFormats,
+                            fourKFormats: fourKFormats,
+                            defaultFormat: configuration.videoFormat
+                        )
+                    }
+                    if let captureVideoFormat { configuration.videoFormat = captureVideoFormat }
+                } else {
+                    // ARKit's default preview keeps idle sensor/encoder work lower.
+                    captureVideoFormat = nil
+                }
+                capture.selectCaptureCamera(
+                    configuration.videoFormat,
+                    forCapture: usesCaptureVideoFormat,
+                    fourKSupported: !fourKFormats.isEmpty
+                )
                 if policy.usesDepth,
                    ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                     configuration.frameSemantics.insert(.sceneDepth)
@@ -64,8 +87,40 @@ struct ARCaptureView: UIViewRepresentable {
                 view.session.run(configuration)
                 lastUsesCaptureSensors = policy.usesCaptureSensors
                 lastUsesDepth = policy.usesDepth
+                lastUsesCaptureVideoFormat = usesCaptureVideoFormat
             }
             renderer.update(view: view, capture: capture)
+        }
+
+        private func preferredCaptureFormat(
+            rearFormats: [ARConfiguration.VideoFormat],
+            fourKFormats: [ARConfiguration.VideoFormat],
+            defaultFormat: ARConfiguration.VideoFormat
+        ) -> ARConfiguration.VideoFormat {
+            // Only use a physical ultra-wide camera exposed by this ARKit
+            // configuration; never open a separate camera and lose calibration.
+            if let ultraWide4K = fourKFormats
+                .filter({ $0.captureDeviceType == .builtInUltraWideCamera })
+                .min(by: { $0.framesPerSecond < $1.framesPerSecond }) {
+                return ultraWide4K
+            }
+            if #available(iOS 16.0, *),
+               let recommended = ARWorldTrackingConfiguration.recommendedVideoFormatFor4KResolution,
+               let supported = fourKFormats.first(where: {
+                   $0.captureDeviceType == recommended.captureDeviceType
+                       && $0.imageResolution == recommended.imageResolution
+                       && $0.framesPerSecond == recommended.framesPerSecond
+               }) {
+                return supported
+            }
+            if let supported4K = fourKFormats.min(by: { $0.framesPerSecond < $1.framesPerSecond }) {
+                return supported4K
+            }
+            return rearFormats
+                .filter { $0.captureDeviceType == .builtInUltraWideCamera }
+                .max { $0.imageResolution.width * $0.imageResolution.height
+                    < $1.imageResolution.width * $1.imageResolution.height }
+                ?? defaultFormat
         }
 
         func clear(view: ARView) {

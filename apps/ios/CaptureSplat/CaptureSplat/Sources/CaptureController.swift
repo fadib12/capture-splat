@@ -247,7 +247,14 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var captureProfileText = "RGB-D keyframes"
     @Published var captureProfileDetail = "Quality-gated RGB, depth, pose, IMU, and GNSS bundle."
     @Published private(set) var cameraLensLabel = "ARKit camera"
+    @Published private(set) var cameraResolutionLabel = "Camera preparing"
     private var selectedCameraType: AVCaptureDevice.DeviceType?
+    private var selectedVideoResolution = Resolution(w: 0, h: 0)
+    private var selectedVideoFPS = 0
+    private var selectedVideoFormatIsForCapture = false
+    private var fourKVideoFormatSupported = false
+    private var observedRecordingVideoResolution: Resolution?
+    private var cameraFormatTransitionFrameCount = 0
     @Published var recordedVideoFrames = 0
     @Published var captureIntent = "room_walkthrough"
     @Published var hapticAcceptedCount = 0
@@ -812,6 +819,8 @@ final class CaptureController: NSObject, ObservableObject {
             statusText = targetLockStatus
             return
         }
+        observedRecordingVideoResolution = nil
+        cameraResolutionLabel = "Camera preparing"
         isStarting = true
         statusText = "Starting capture"
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -869,6 +878,8 @@ final class CaptureController: NSObject, ObservableObject {
             isWritingFrame = false
             rgbFrames = 0
             recordedVideoFrames = 0
+            observedRecordingVideoResolution = nil
+            cameraFormatTransitionFrameCount = 0
             depthFrames = 0
             imuRows = 0
             accumulatedIMURows = 0
@@ -987,6 +998,7 @@ final class CaptureController: NSObject, ObservableObject {
                 "capture_intent": captureIntent,
                 "capture_profile": captureProfileLabel(),
                 "camera_device_type": selectedCameraType?.rawValue ?? "arkit_primary",
+                "requested_rgb_resolution": ["w": 3840, "h": 2160],
                 "startup_latency_seconds": startupLatency,
             ])
             logger.info("Capture recording started after \(startupLatency, privacy: .public) seconds")
@@ -1135,7 +1147,7 @@ final class CaptureController: NSObject, ObservableObject {
             rgb: StreamReport(
                 format: "jpeg",
                 requestedFPS: 30,
-                requestedResolution: Resolution(w: 1920, h: 1080),
+                requestedResolution: Resolution(w: 3840, h: 2160),
                 achievedFPS: estimatedFPS(),
                 achievedResolution: activeResolution,
                 units: nil
@@ -2171,10 +2183,50 @@ final class CaptureController: NSObject, ObservableObject {
         )
     }
 
-    func selectCaptureCamera(_ format: ARConfiguration.VideoFormat) {
+    func selectCaptureCamera(
+        _ format: ARConfiguration.VideoFormat,
+        forCapture: Bool,
+        fourKSupported: Bool
+    ) {
         selectedCameraType = format.captureDeviceType
-        let label = format.captureDeviceType == .builtInUltraWideCamera ? "0.5x Ultra Wide" : "ARKit Wide"
+        selectedVideoResolution = Resolution(
+            w: Int(format.imageResolution.width),
+            h: Int(format.imageResolution.height)
+        )
+        selectedVideoFPS = format.framesPerSecond
+        selectedVideoFormatIsForCapture = forCapture
+        fourKVideoFormatSupported = fourKSupported
+        let label: String
+        switch format.captureDeviceType {
+        case .builtInUltraWideCamera: label = "Ultra Wide"
+        case .builtInWideAngleCamera: label = "ARKit Wide"
+        default: label = "ARKit camera"
+        }
         if cameraLensLabel != label { cameraLensLabel = label }
+        // A selected format is a request. Only an arriving ARFrame can confirm
+        // the achieved resolution; the UI never calls an unobserved stream 4K.
+        if forCapture, observedRecordingVideoResolution == nil {
+            cameraResolutionLabel = "Camera preparing"
+        }
+    }
+
+    private func captureVideoFormatReport() -> [String: Any] {
+        let observed = observedRecordingVideoResolution ?? Resolution(w: 0, h: 0)
+        let captured4K = max(observed.w, observed.h) >= 3840 && min(observed.w, observed.h) >= 2160
+        return [
+            "requested_resolution": ["w": 3840, "h": 2160],
+            "four_k_supported_format_available": fourKVideoFormatSupported,
+            "selected_resolution": ["w": selectedVideoResolution.w, "h": selectedVideoResolution.h],
+            "selected_camera_fps": selectedVideoFPS,
+            "selected_camera_device_type": selectedCameraType?.rawValue ?? "arkit_primary",
+            "observed_video_resolution": ["w": observed.w, "h": observed.h],
+            "four_k_frames_observed": captured4K,
+            "format_transition_frames_skipped": cameraFormatTransitionFrameCount,
+            "format_policy": "supported_arkit_4k_then_supported_ultra_wide_then_default",
+            "format_fixed_for_recording": true,
+            "depth_policy": "preserve_arkit_scene_depth_and_per_frame_calibration",
+            "render_or_reconstruction_quality_claim": false,
+        ]
     }
 
     private var activeCaptureDevice: AVCaptureDevice? {
@@ -3410,6 +3462,7 @@ final class CaptureController: NSObject, ObservableObject {
             "minimum_keyframe_interval_seconds": activeMinimumKeyframeInterval,
             "continuous_video_target_fps": videoRecorder.targetFPS,
             "continuous_video_sampling_policy": "thermal_adaptive_20_12_8_4",
+            "camera_video_format": captureVideoFormatReport(),
             "quality_gate": [
                 "keyframe_score_threshold": activeKeyframeScoreThreshold,
                 "min_blur_score": minBlurScore,
@@ -5067,6 +5120,32 @@ extension CaptureController: ARSessionDelegate {
         latestFeaturePointCount = frame.rawFeaturePoints?.points.count ?? 0
         updateMotionRate(from: frame)
         if isRecording, currentSessionDirectory != nil {
+            let width = CVPixelBufferGetWidth(frame.capturedImage)
+            let height = CVPixelBufferGetHeight(frame.capturedImage)
+            // The Record action and SwiftUI session reconfiguration can occur on
+            // adjacent run-loop turns. Do not let an old preview frame initialize
+            // the fixed-size video writer, or mix dimensions later in the scan.
+            guard selectedVideoFormatIsForCapture,
+                  width == selectedVideoResolution.w,
+                  height == selectedVideoResolution.h else {
+                cameraFormatTransitionFrameCount += 1
+                statusText = "Preparing capture camera"
+                return
+            }
+            if observedRecordingVideoResolution == nil {
+                observedRecordingVideoResolution = Resolution(w: width, h: height)
+                let fourK = max(width, height) >= 3840 && min(width, height) >= 2160
+                cameraResolutionLabel = fourK ? "4K" : "\(width) x \(height)"
+                statusText = "Recording"
+                appendSessionEvent("camera_video_format_observed", arTimestamp: frame.timestamp, details: [
+                    "width": width,
+                    "height": height,
+                    "four_k": fourK,
+                    "scene_depth_present": frame.sceneDepth != nil,
+                    "selected_camera_fps": selectedVideoFPS,
+                    "camera_device_type": selectedCameraType?.rawValue ?? "arkit_primary",
+                ])
+            }
             videoRecorder.append(frame: frame, captureDevice: activeCaptureDevice)
             schedulePersonMask(from: frame)
         }

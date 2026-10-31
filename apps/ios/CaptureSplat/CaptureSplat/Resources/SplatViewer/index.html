@@ -1,5 +1,63 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob:; worker-src blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' capturesplat:;">
-<title>Room splat</title><style>html,body{margin:0;background:#101114;color:white;overflow:hidden;width:100%;height:100%;font:14px system-ui}canvas{width:100%;height:100%;touch-action:none}#message{position:absolute;top:20%;left:10%;right:10%;text-align:center}#spinner{position:absolute;top:45%;width:100%;text-align:center;pointer-events:none}#spinner:after{content:'Opening splat...'}#progress{position:absolute;top:0;left:0;height:3px;background:#26c8ef}#quality,#caminfo{display:none}</style></head>
-<body><div id="progress"></div><div id="message"></div><div id="spinner"></div><canvas id="canvas"></canvas><div id="quality"><span id="fps"></span></div><div id="caminfo"><span id="camid"></span></div><script src="main.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' capturesplat:; img-src 'self' data:;">
+  <title>Room Splat</title>
+  <style>
+    :root { color-scheme: dark; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #101216; color: #fff; overscroll-behavior: none; user-select: none; -webkit-user-select: none; }
+    #canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+    button { color: inherit; font: inherit; border: 0; cursor: pointer; touch-action: manipulation; }
+    button:focus-visible, #joystick:focus-visible { outline: 3px solid #52d7f8; outline-offset: 3px; }
+    button:active { transform: scale(.96); }
+    .glass { background: rgba(21,24,30,.83); border: 1px solid #ffffff26; box-shadow: 0 5px 22px #0003; }
+    #toolbar { position: absolute; top: max(14px,env(safe-area-inset-top)); left: 14px; right: 14px; display: flex; align-items: center; gap: 8px; }
+    #modes { display: flex; padding: 4px; border-radius: 16px; }
+    #modes button { min-width: 64px; min-height: 38px; padding: 8px 14px; border-radius: 11px; background: transparent; color: #c4c9d3; font-weight: 600; }
+    #modes button[aria-pressed="true"] { color: #12171c; background: #f2f6fa; }
+    #toolbar > button { min-width: 44px; height: 46px; padding: 0 13px; border-radius: 15px; font-weight: 600; }
+    #reset { margin-left: auto; }
+    #loading { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 14px; padding: 28px; background: #101216; z-index: 5; }
+    #loading[hidden], [hidden] { display: none !important; }
+    .spinner { width: 30px; height: 30px; border: 2px solid #ffffff24; border-top-color: #52d7f8; border-radius: 50%; margin: auto; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #message { margin: 0; max-width: 320px; line-height: 1.5; color: #d7dce5; }
+    #hint { position: absolute; top: max(80px,calc(env(safe-area-inset-top) + 68px)); left: 20px; right: 20px; text-align: center; color: #f2f5f8; text-shadow: 0 1px 6px #000; font-size: 12px; pointer-events: none; transition: opacity .4s; }
+    #navigation { position: absolute; inset: auto 0 max(22px,env(safe-area-inset-bottom)); height: 156px; pointer-events: none; }
+    #joystick { position: absolute; left: 24px; bottom: 16px; width: 116px; height: 116px; border-radius: 50%; touch-action: none; pointer-events: auto; }
+    #joystick::before, #joystick::after { content: ''; position: absolute; background: #ffffff19; pointer-events: none; }
+    #joystick::before { width: 1px; height: 82px; left: 57px; top: 16px; }
+    #joystick::after { width: 82px; height: 1px; left: 16px; top: 57px; }
+    #thumb { position: absolute; width: 46px; height: 46px; left: 34px; top: 34px; border-radius: 50%; background: #eef6ffdc; box-shadow: 0 2px 12px #0005; pointer-events: none; z-index: 1; }
+    #move-label { position: absolute; left: 24px; width: 116px; bottom: -5px; text-align: center; font-size: 11px; color: #d1d8e2; text-shadow: 0 1px 4px #000; }
+    #height { position: absolute; right: 22px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; }
+    #height button { width: 48px; height: 48px; border-radius: 16px; font-size: 24px; touch-action: none; }
+    #speed { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); height: 38px; padding: 0 15px; border-radius: 20px; pointer-events: auto; font-size: 12px; }
+    #speed:active { transform: translateX(-50%) scale(.96); }
+    #reticle { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #ffffffaa; border-radius: 50%; pointer-events: none; box-shadow: 0 0 3px #0007; }
+    body[data-mode="orbit"] #navigation, body[data-mode="orbit"] #reticle { display: none; }
+    @media (max-width:350px) { #toolbar { gap: 5px; left: 10px; right: 10px; } #modes button { min-width: 52px; padding: 8px 9px; } #toolbar > button { padding: 0 10px; } }
+    @media (max-height:480px) { #joystick { width: 96px; height: 96px; bottom: 0; } #thumb { left: 24px; top: 24px; } #joystick::before { left: 47px; top: 6px; } #joystick::after { left: 6px; top: 47px; } #move-label { display: none; } #height { bottom: 0; flex-direction: row; } #navigation { bottom: 16px; } #hint { top: 72px; } }
+  </style>
+</head>
+<body data-mode="walk">
+  <canvas id="canvas" aria-label="Interactive room splat. Drag to look around." tabindex="0"></canvas>
+  <div id="toolbar">
+    <div id="modes" class="glass" role="group" aria-label="Navigation mode"><button id="walk" aria-pressed="true">Walk</button><button id="orbit" aria-pressed="false">Orbit</button></div>
+    <button id="quality" class="glass" aria-label="Rendering detail. Tap for smoother movement.">Detail</button>
+    <button id="reset" class="glass" aria-label="Return to the starting view">Reset</button>
+  </div>
+  <div id="hint">Drag to look · Use the pad to move</div><div id="reticle" aria-hidden="true"></div>
+  <div id="navigation">
+    <div id="joystick" class="glass" role="group" tabindex="0" aria-label="Movement pad. Drag up to go forward, down to go back, left or right to move sideways. Keyboard: W A S D."><div id="thumb"></div></div>
+    <div id="move-label" aria-hidden="true">MOVE</div>
+    <button id="speed" class="glass" aria-label="Movement speed. Tap to change.">Normal speed</button>
+    <div id="height" role="group" aria-label="Camera height"><button id="up" class="glass" aria-label="Move up">↑</button><button id="down" class="glass" aria-label="Move down">↓</button></div>
+  </div>
+  <div id="loading" role="status" aria-live="polite"><div class="spinner"></div><p id="message">Opening your room…</p></div>
+  <script src="main.js"></script>
+</body>
+</html>

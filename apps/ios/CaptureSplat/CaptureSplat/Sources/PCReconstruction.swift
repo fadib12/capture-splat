@@ -184,14 +184,21 @@ final class PCReconstructionClient: ObservableObject {
             guard data.count == bytes,
                   SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest
             else { throw PCError.rejected }
-            let source = temporary.appendingPathExtension("splat")
+            let format = state["result_format"] as? String ?? "splat"
+            guard ["splat", "ply"].contains(format) else { throw PCError.rejected }
+            let source = temporary.appendingPathExtension(format)
             try FileManager.default.copyItem(at: temporary, to: source)
             defer { try? FileManager.default.removeItem(at: source) }
-            let model = try SplatLibrary.importModel(source)
-            // Pinned ReSplat demo exports in a context-view frame with +Z forward.
-            let camera: [String: Any] = ["id": 0, "width": 1920, "height": 1440, "fx": 1100, "fy": 1100,
-                                        "position": [0, 0, 0], "rotation": [[1,0,0],[0,1,0],[0,0,1]]]
-            try JSONSerialization.data(withJSONObject: camera).write(to: model.appendingPathExtension("camera.json"), options: .atomic)
+            let model = try await Task.detached(priority: .userInitiated) {
+                try SplatLibrary.importModel(source)
+            }.value
+            // Camera is expressed in the exported context-view CV frame. The
+            // viewer converts its basis once and uses the bound gravity vector.
+            guard let camera = state["viewer_camera"] as? [String: Any],
+                  JSONSerialization.isValidJSONObject(camera) else { throw PCError.rejected }
+            let cameraData = try JSONSerialization.data(withJSONObject: camera)
+            guard cameraData.count < 2048 else { throw PCError.rejected }
+            try cameraData.write(to: model.appendingPathExtension("camera.json"), options: .atomic)
             completedModel = model
             message = "Splat ready. Reconstruction quality has not been verified."
         } catch { message = error.localizedDescription }
@@ -236,6 +243,9 @@ struct PCReconstructionView: View {
             .navigationTitle("PC reconstruction")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .interactiveDismissDisabled(client.busy)
+            .onChange(of: client.completedModel) { _, model in
+                if let model { openModel(model) }
+            }
             .sheet(isPresented: $scanning) {
                 LivePairingQRScanner(onInvitation: { invitation in
                     scanning = false

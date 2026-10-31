@@ -12,8 +12,8 @@ enum SplatLibrary {
 
     static var latest: URL? {
         guard let name = UserDefaults.standard.string(forKey: "latestTrainedSplat"),
-              UUID(uuidString: String(name.dropLast(6))) != nil,
-              name.hasSuffix(".splat") else { return nil }
+              ["splat", "ply"].contains((name as NSString).pathExtension),
+              UUID(uuidString: (name as NSString).deletingPathExtension) != nil else { return nil }
         let url = directory.appendingPathComponent(name)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
@@ -21,18 +21,31 @@ enum SplatLibrary {
     static func importModel(_ source: URL) throws -> URL {
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-        guard source.pathExtension.lowercased() == "splat" else {
+        let format = source.pathExtension.lowercased()
+        guard ["splat", "ply"].contains(format) else {
             throw NSError(domain: "CaptureSplat", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Choose the trained .splat file exported by the desktop trainer."])
+                          userInfo: [NSLocalizedDescriptionKey: "Choose a trained .ply or .splat file exported by the desktop trainer."])
         }
         let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size > 0, size <= 64 * 1024 * 1024, size.isMultiple(of: 32) else {
+        guard size > 0, size <= 64 * 1024 * 1024 else {
             throw NSError(domain: "CaptureSplat", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "This splat is empty, invalid, or exceeds the 64 MB mobile limit."])
         }
         let data = try Data(contentsOf: source, options: .mappedIfSafe)
         guard data.count == size else { throw CocoaError(.fileReadCorruptFile) }
-        let valid = data.withUnsafeBytes { bytes in
+        let valid = format == "ply" ? validateGaussianPLY(data) : validateCompactSplat(data)
+        guard valid else { throw CocoaError(.fileReadCorruptFile) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let name = UUID().uuidString + "." + format
+        let target = directory.appendingPathComponent(name)
+        try data.write(to: target, options: .atomic)
+        UserDefaults.standard.set(name, forKey: "latestTrainedSplat")
+        return target
+    }
+
+    private static func validateCompactSplat(_ data: Data) -> Bool {
+        guard data.count.isMultiple(of: 32) else { return false }
+        return data.withUnsafeBytes { bytes in
             for offset in stride(from: 0, to: bytes.count, by: 32) {
                 for field in 0..<6 {
                     let value = bytes.loadUnaligned(fromByteOffset: offset + field * 4, as: Float.self)
@@ -42,13 +55,76 @@ enum SplatLibrary {
             }
             return true
         }
-        guard valid else { throw CocoaError(.fileReadCorruptFile) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = UUID().uuidString + ".splat"
-        let target = directory.appendingPathComponent(name)
-        try data.write(to: target, options: .atomic)
-        UserDefaults.standard.set(name, forKey: "latestTrainedSplat")
-        return target
+    }
+
+    /// Accept only the bounded binary float Gaussian contract produced by our trainer.
+    /// Mesh PLYs, arbitrary lists/types, trailing bytes and non-finite values are rejected.
+    private static func validateGaussianPLY(_ data: Data) -> Bool {
+        let prefix = Data(data.prefix(16 * 1024))
+        let marker = prefix.range(of: Data("end_header\n".utf8))
+            ?? prefix.range(of: Data("end_header\r\n".utf8))
+        guard let marker,
+              let header = String(data: data.prefix(marker.upperBound), encoding: .utf8) else { return false }
+        let lines = header.components(separatedBy: "\n").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+        guard lines.count <= 100, lines.first == "ply", lines.last == "end_header" else { return false }
+        var vertexCount: Int?
+        var formatSeen = false
+        var properties: [String] = []
+        let base = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
+                    "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
+        let optional = Set(["nx", "ny", "nz"] + (0..<45).map { "f_rest_\($0)" })
+        let allowed = Set(base).union(optional)
+        for line in lines.dropFirst().dropLast() {
+            let fields = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard let first = fields.first else { continue }
+            switch first {
+            case "comment", "obj_info": continue
+            case "format":
+                guard !formatSeen, vertexCount == nil,
+                      fields == ["format", "binary_little_endian", "1.0"] else { return false }
+                formatSeen = true
+            case "element":
+                guard formatSeen, vertexCount == nil, fields.count == 3, fields[1] == "vertex",
+                      fields[2].allSatisfy(\.isNumber), let count = Int(fields[2]),
+                      count > 0, count <= 2_000_000 else { return false }
+                vertexCount = count
+            case "property":
+                guard vertexCount != nil, fields.count == 3,
+                      ["float", "float32"].contains(fields[1]), allowed.contains(fields[2]),
+                      !properties.contains(fields[2]) else { return false }
+                properties.append(fields[2])
+            default: return false
+            }
+        }
+        guard let vertexCount, Set(base).isSubset(of: Set(properties)) else { return false }
+        let shCount = properties.filter { $0.hasPrefix("f_rest_") }.count
+        guard [0, 9, 24, 45].contains(shCount),
+              (0..<shCount).allSatisfy({ properties.contains("f_rest_\($0)") }) else { return false }
+        let stride = properties.count * 4
+        guard data.count == marker.upperBound + vertexCount * stride else { return false }
+        let rotationOffsets = (0..<4).compactMap { properties.firstIndex(of: "rot_\($0)") }
+        let scaleOffsets = (0..<3).compactMap { properties.firstIndex(of: "scale_\($0)") }
+        return data.withUnsafeBytes { bytes in
+            for row in 0..<vertexCount {
+                let start = marker.upperBound + row * stride
+                for field in properties.indices {
+                    if !bytes.loadUnaligned(fromByteOffset: start + field * 4, as: Float.self).isFinite { return false }
+                }
+                var norm: Double = 0
+                for field in rotationOffsets {
+                    let value = Double(bytes.loadUnaligned(fromByteOffset: start + field * 4, as: Float.self))
+                    norm += value * value
+                }
+                guard norm > 1e-16, norm.isFinite else { return false }
+                for field in scaleOffsets {
+                    let value = bytes.loadUnaligned(fromByteOffset: start + field * 4, as: Float.self)
+                    guard value >= -30, value <= 20 else { return false }
+                }
+            }
+            return true
+        }
     }
 }
 
@@ -104,19 +180,38 @@ private final class LocalSplatResources: NSObject, WKURLSchemeHandler {
         case "/main.js":
             file = Bundle.main.url(forResource: "main", withExtension: "js", subdirectory: "SplatViewer")
             mime = "application/javascript"
-        case "/model.splat": file = model; mime = "application/octet-stream"
+        case "/model.splat" where model.pathExtension.lowercased() == "splat":
+            file = model; mime = "application/octet-stream"
+        case "/model.ply" where model.pathExtension.lowercased() == "ply":
+            file = model; mime = "application/octet-stream"
         default: task.didFailWithError(URLError(.fileDoesNotExist)); return
         }
         guard let file else { task.didFailWithError(URLError(.fileDoesNotExist)); return }
         do {
             var data = try Data(contentsOf: file, options: .mappedIfSafe)
-            if request.path == "/index.html",
-               let cameraData = try? Data(contentsOf: model.appendingPathExtension("camera.json")),
-               cameraData.count < 2048,
-               let camera = try? JSONSerialization.jsonObject(with: cameraData) as? [String: Any],
-               (camera["rotation"] as? [[Int]]) == [[1,0,0],[0,1,0],[0,0,1]],
-               let html = String(data: data, encoding: .utf8) {
-                let script = "<script>window.CAPTURE_SPLAT_CAMERA={id:0,width:1920,height:1440,fx:1100,fy:1100,position:[0,0,0],rotation:[[1,0,0],[0,1,0],[0,0,1]]};</script>"
+            if request.path == "/index.html", let html = String(data: data, encoding: .utf8) {
+                // Inject only fixed format/camera constants, never sidecar strings or file paths.
+                let format = model.pathExtension.lowercased() == "ply" ? "ply" : "splat"
+                var script = "<script>window.CAPTURE_SPLAT_MODEL={url:'model.\(format)',format:'\(format)'};"
+                let cameraURL = model.appendingPathExtension("camera.json")
+                if let cameraSize = try? cameraURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                   cameraSize > 0, cameraSize < 2048,
+                   let cameraData = try? Data(contentsOf: cameraURL),
+                   cameraData.count < 2048,
+                   let camera = try? JSONSerialization.jsonObject(with: cameraData) as? [String: Any],
+                   (camera["rotation"] as? [[Int]]) == [[1,0,0],[0,1,0],[0,0,1]] {
+                    script += "window.CAPTURE_SPLAT_CAMERA={rotation:[[1,0,0],[0,1,0],[0,0,1]]};"
+                    if let gravity = camera["gravity_up"] as? [Double], gravity.count == 3,
+                       gravity.allSatisfy({ $0.isFinite }) {
+                        let norm = sqrt(gravity.reduce(0) { $0 + $1 * $1 })
+                        if norm.isFinite, norm > 1e-6, norm < 1e6,
+                           let gravityData = try? JSONSerialization.data(withJSONObject: gravity.map { $0 / norm }),
+                           let gravityJSON = String(data: gravityData, encoding: .utf8) {
+                            script += "window.CAPTURE_SPLAT_CAMERA.gravity_up=\(gravityJSON);"
+                        }
+                    }
+                }
+                script += "</script>"
                 data = Data(html.replacingOccurrences(of: "<script src=\"main.js\"", with: script + "<script src=\"main.js\"").utf8)
             }
             guard data.count <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
