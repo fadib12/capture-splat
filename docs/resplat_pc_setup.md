@@ -2,7 +2,7 @@
 
 Status: input adapter and experimental TLS PC bridge/mobile client implemented.
 GPU kernels, one local capture execution and checksum-bound TLS result delivery have passed. Physical iPhone acceptance and visual-quality comparison remain open. A source
-change requires the new 0.1.5 (6) IPA; older IPAs cannot submit scans.
+change requires the new 0.1.6 (8) IPA for full-SH PLY, gravity-aware controls and 4K capture selection. Version 0.1.5 can submit but uses the older compact viewer path.
 
 The existing pretrained implementation is external `cvg/resplat`, pinned to
 `cae7ddc4cdbd80e05e9f5fa00f5ea02c4e9056b1`. Code and published model card list
@@ -71,8 +71,8 @@ from `runs/pc-bridge/connection-code.txt` is also supported. After a finalized
 scan choose Create room splat -> Create splat on PC. This explicitly sends only
 accepted RGB photographs and the capture manifest; video, raw depth and mesh
 are not uploaded by this trial. Keep the app open. Reopening and submitting the
-same unchanged scan resumes stored image uploads or observes its existing run.
-Failed runs require PC inspection. Explicitly submitting again can retry up to three attempts, reusing verified uploads and archiving earlier outputs; failures are never silently rerun or promoted.
+same unchanged scan resumes stored image uploads or observes its existing run. Explicit resubmission after a pipeline revision archives the older model and reuses verified uploads for the new revision.
+Failed runs require PC inspection. Explicitly submitting again can retry up to three attempts per pipeline revision (twelve retained attempts total), reusing verified uploads and archiving earlier outputs; failures are never silently rerun or promoted.
 
 One GPU process runs at a time. The bridge bounds itself to eight scans, 512
 images per manifest, 25 MiB per image, 512 MiB uploaded per scan, and 64 MiB
@@ -81,8 +81,7 @@ limit. Do not move the source scans. The PC must stay awake; restart the service
 manually after a PC restart. Existing Windows firewall rules may require a
 private-network exception for TCP 8770. Do not expose it to the public internet.
 
-Job completion returns a checksum-bound `.splat`; it grants no quality or
-metric authority. The small pretrained model selects eight context views, so
+Job completion returns a checksum-bound full-SH Gaussian `.ply`, retaining the compact `.splat` as a fallback artifact; it grants no quality or metric authority. The small pretrained model selects eight context views, so
 this trial must not be sold as complete-room reconstruction. This single-user
 experimental executor is not a replacement for production World Studio jobs,
 per-user permissions, reviewed publication or cloud retention/deletion.
@@ -111,3 +110,55 @@ model and passed authenticated TLS download/checksum verification. It remains
 The CUDA compiler uses native Linux paths, one build job and the headers
 shipped with the pinned PyTorch NVIDIA packages. The host-side private-network
 rule can be installed with `scripts/enable_resplat_private_firewall.ps1`.
+
+
+## Detail and export upgrade
+
+`small` and `detail` are explicit pretrained profiles. Download their pinned
+weights with `scripts/download_resplat_checkpoint.py --profile detail`. The
+detail profile uses the published base 8-view 512x960 checkpoint, SHA-256
+`8179ed879d9f1d88abd2f3374af61ca6ccdfe6121c822f87cdf55ba8cbcfff59`.
+It is not a 4K-trained checkpoint. A native-resolution attempt exceeded the
+RTX 3070 memory budget; select it only after the memory adapter and a real
+execution have passed on the target machine. Profile choice is explicit in
+`start_resplat_pc.py --profile small|detail` and the saved receipt.
+
+The pinned encoder rasterizes world-space covariance matrices, while its old
+export retained camera-local rotations. Our independent export adapter composes
+the correct world rotations, verifies all covariance matrices, and checks the
+actual PLY readback against those matrices. Upstream source stays pinned and
+unchanged. Across eight matching cameras on the local Room-193312 small run,
+full-SH PLY render parity with the internal renderer improved from 20.15 dB to
+52.90 dB. This measures export consistency, not agreement with photographs,
+room completeness or metric accuracy.
+
+The app now uses the pinned open-source Spark viewer with Three OrbitControls,
+a movement joystick, touch look, height, speed and reset. Full PLY retains SH3
+lighting that compact .splat cannot carry. A bounded gravity vector from the
+selected source camera levels the horizon without changing model coordinates.
+These are free-camera controls; there is no measured collision model.
+
+The new capture path requests ARKit's supported 4K format only during capture.
+It preserves LiDAR, calibrated intrinsics and one fixed writer size; an observed
+buffer must match the selected size before encoding. The 4K badge is based on
+the actual buffer, and a fallback records the actual dimensions and reason.
+Ultra-wide is used only when the ARKit world-tracking configuration exposes it.
+Idle preview uses the default lighter format. Device/thermal testing is still
+required; 4K has a resource cost and does not guarantee sharp reconstruction.
+Existing 1920x1440 scans are not converted into genuine 4K source detail.
+
+Viewer sources and reproducible pinned bundling instructions are in
+`apps/ios/CaptureSplat/CaptureSplat/Resources/SplatViewer/UPSTREAM.md`.
+References: [Spark](https://github.com/sparkjsdev/spark),
+[ARKit 4K camera formats](https://developer.apple.com/videos/play/wwdc2022/10126/).
+
+
+The optional memory adapter (`CAPTURE_SPLAT_RESPLAT_MEMORY=chunked`) replaces one
+source-SHA- and AST-bound cost-volume boundary in memory, using the external
+warping primitive with bounded view/depth chunks. It keeps the input resolution,
+views and depth hypotheses, but floating-point execution order can differ.
+Three tests passed in the actual Linux Torch runtime. A same-input small run
+completed with all covariance checks; its minimum matched-render PSNR versus the
+original run was 39.49 dB, below the provisional 45 dB numerical-consistency rail.
+This adapter remains **hold** and is not enabled by the production bridge default.
+Do not call it pixel-identical or promote a high-detail/8GB quality claim from it.

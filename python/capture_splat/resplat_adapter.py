@@ -15,6 +15,21 @@ SOURCE_COMMIT = 'cae7ddc4cdbd80e05e9f5fa00f5ea02c4e9056b1'
 CHECKPOINT = 'resplat-small-dl3dv-256x448-view8-548993fe.pth'
 CHECKPOINT_SHA256 = '548993fede0d9536d2d914cbe51e0ebea0ad6f88c898c909e02127d59bb2be9a'
 
+MODEL_PROFILES = {
+    'small': {'preset': 'dl3dv_8v_256x448_small', 'checkpoint': CHECKPOINT,
+              'sha256': CHECKPOINT_SHA256, 'image_shape': None},
+    'detail': {'preset': 'dl3dv_8v_512x960',
+               'checkpoint': 'resplat-base-dl3dv-512x960-view8-8179ed87.pth',
+               'sha256': '8179ed879d9f1d88abd2f3374af61ca6ccdfe6121c822f87cdf55ba8cbcfff59',
+               'image_shape': [512, 960]},
+}
+
+
+def profile_config(name: str) -> dict:
+    if name not in MODEL_PROFILES:
+        raise ValueError('Unknown pretrained ReSplat profile.')
+    return dict(MODEL_PROFILES[name])
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -91,13 +106,17 @@ def prepare(capture: Path, out: Path) -> dict:
     return receipt
 
 
-def inference_command(root: Path, scene: Path, output: Path, python: str = 'python') -> list[str]:
+def inference_command(root: Path, scene: Path, output: Path, python: str = 'python', profile: str = 'small') -> list[str]:
     """Build argv for the pinned upstream program; never execute through a shell."""
-    return [python, str(root / 'scripts/infer_colmap.py'),
-            '--model_preset', 'dl3dv_8v_256x448_small',
-            '--checkpoint', str(root / 'pretrained' / CHECKPOINT),
+    selected = profile_config(profile)
+    command = [python, str(root / 'scripts/infer_colmap.py'),
+            '--model_preset', selected['preset'],
+            '--checkpoint', str(root / 'pretrained' / selected['checkpoint']),
             '--scene_path', str(scene), '--images_dir', 'images',
             '--sparse_dir', 'sparse/0', '--output_dir', str(output),
             '--start_frame', '0', '--frame_distance', '512',
             '--num_target', '8', '--render_chunk_size', '1',
             '--max_save_images', '8', '--save_images', '--save_ply', '--no_eval']
+    if selected['image_shape']:
+        command += ['--image_shape', *map(str, selected['image_shape'])]
+    return command

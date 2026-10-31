@@ -24,6 +24,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', required=True, help='Private IPv4 address reachable from your iPhone.')
     parser.add_argument('--port', type=int, default=8770)
+    parser.add_argument('--profile', choices=('small', 'detail'), default='small',
+                        help='Pinned pretrained profile; select detail after local GPU validation.')
     args = parser.parse_args()
     address = ipaddress.IPv4Address(args.host)
     if not address.is_private or address.is_unspecified or address.is_multicast:
@@ -56,14 +58,16 @@ def main():
     import qrcode
     if not (state_dir / 'connection-qr.png').is_file():
         qrcode.make('capturesplat-pc:' + code).save(state_dir / 'connection-qr.png')
-    store = BridgeStore(state_dir / 'scans', wsl_worker(repo),
-                        runtime_ready=lambda: (state_dir / 'runtime-ready.json').is_file())
+    store = BridgeStore(state_dir / 'scans', wsl_worker(repo, args.profile),
+                        runtime_ready=lambda: (state_dir / 'runtime-ready.json').is_file(),
+                        profile=args.profile)
     server = HTTPServer((args.host, args.port), handler(store, config['token']))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(state_dir / 'cert.pem', state_dir / 'key.pem')
     server.socket = context.wrap_socket(server.socket, server_side=True)
     print(f'PC bridge listening at {pairing["url"]}; connection code saved locally under runs/pc-bridge/.', flush=True)
+    print(f'Reconstruction profile: {store.profile}; pipeline: {store.pipeline_revision}.', flush=True)
     server.serve_forever()
 
 

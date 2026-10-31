@@ -88,3 +88,15 @@ def test_command_preserves_paths_as_argv_and_bounds_render_batch():
     assert command[command.index('--frame_distance') + 1] == '512'
     assert '--save_ply' in command
     assert '--no_eval' in command  # Runtime smoke is not a quality evaluation.
+
+
+def test_detail_profile_uses_pinned_native_resolution_checkpoint():
+    from capture_splat.resplat_adapter import profile_config
+    config = profile_config('detail')
+    command = inference_command(Path('external/resplat'), Path('scene'), Path('out'), profile='detail')
+    assert command[command.index('--model_preset') + 1] == 'dl3dv_8v_512x960'
+    assert command[-3:] == ['--image_shape', '512', '960']
+    assert command[command.index('--checkpoint') + 1].endswith(config['checkpoint'])
+    assert config['sha256'] == '8179ed879d9f1d88abd2f3374af61ca6ccdfe6121c822f87cdf55ba8cbcfff59'
+    with pytest.raises(ValueError, match='Unknown'):
+        profile_config('4k')
