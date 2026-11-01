@@ -75,9 +75,11 @@ control.
 
 Enable the protocol with `scripts/start_resplat_pc.py --host PRIVATE_IP --enable-rgbd`
 only after a real GPU execution has created the local readiness evidence under
-`runs/pc-bridge/`. The app needs version 0.1.8 (10) or newer. Retain the existing
+`runs/pc-bridge/`. The app needs version 0.1.8 (11) or newer. Retain the existing
 private TLS pairing; credentials never enter Git or the IPA. Keep the app open
-until upload, PC reconstruction and the checked result download finish.
+until upload, PC reconstruction and the checked result download finish. Auto-lock
+is temporarily disabled during that operation and its previous setting is restored
+on completion or error.
 
 This path uses per-room optimization in an existing trainer. It does not turn
 ReSplat into an RGB-D pretrained model or promise reconstruction in seconds.

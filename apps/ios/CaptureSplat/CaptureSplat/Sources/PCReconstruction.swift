@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import Security
 import SwiftUI
+import UIKit
 import VisionKit
 
 private struct PCConnection: Codable {
@@ -190,7 +191,12 @@ final class PCReconstructionClient: ObservableObject {
     func reconstruct(directory: URL) async {
         guard !busy, let connection else { return }
         busy = true; completedModel = nil
-        defer { busy = false }
+        let previousIdleTimerState = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer {
+            busy = false
+            UIApplication.shared.isIdleTimerDisabled = previousIdleTimerState
+        }
         let session = makeSession(connection)
         defer { session.invalidateAndCancel() }
         do {

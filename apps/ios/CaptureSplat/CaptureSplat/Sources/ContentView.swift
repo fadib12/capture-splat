@@ -277,7 +277,7 @@ struct ContentView: View {
                     }
                     Button("Camera settings", systemImage: "camera.aperture") { activeSheet = .camera }
                     Button("World Studio pairing", systemImage: "antenna.radiowaves.left.and.right") { activeSheet = .livePairing }
-                    Text("Version 0.1.8 (10)")
+                    Text("Version 0.1.8 (11)")
                 } label: {
                     Image(systemName: "ellipsis").frame(width: 44, height: 44)
                         .background(.ultraThinMaterial, in: Circle())
