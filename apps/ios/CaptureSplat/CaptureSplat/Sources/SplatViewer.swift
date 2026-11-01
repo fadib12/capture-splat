@@ -161,6 +161,29 @@ private final class LocalSplatResources: NSObject, WKURLSchemeHandler {
     private var stopped: Set<ObjectIdentifier> = []
     init(model: URL) { self.model = model }
 
+    private func worldCameraScript(_ camera: [String: Any]) -> String? {
+        guard camera["convention"] as? String == "opengl",
+              let rotation = camera["rotation"] as? [[Double]], rotation.count == 3,
+              rotation.allSatisfy({ $0.count == 3 && $0.allSatisfy { $0.isFinite } }),
+              let position = camera["position"] as? [Double], position.count == 3,
+              position.allSatisfy({ $0.isFinite && abs($0) < 1e6 }) else { return nil }
+        for row in 0..<3 {
+            for column in 0..<3 {
+                let dot = (0..<3).reduce(0.0) { $0 + rotation[row][$1] * rotation[column][$1] }
+                if abs(dot - (row == column ? 1 : 0)) > 1e-3 { return nil }
+            }
+        }
+        let determinant = rotation[0][0] * (rotation[1][1] * rotation[2][2] - rotation[1][2] * rotation[2][1])
+            - rotation[0][1] * (rotation[1][0] * rotation[2][2] - rotation[1][2] * rotation[2][0])
+            + rotation[0][2] * (rotation[1][0] * rotation[2][1] - rotation[1][1] * rotation[2][0])
+        guard determinant > 0.999 else { return nil }
+        let value: [String: Any] = ["convention": "opengl", "rotation": rotation,
+                                    "position": position, "gravity_up": [0, 1, 0]]
+        guard let data = try? JSONSerialization.data(withJSONObject: value),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return "window.CAPTURE_SPLAT_CAMERA=\(json);"
+    }
+
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
         lock.lock(); stopped.insert(ObjectIdentifier(urlSchemeTask)); lock.unlock()
     }
@@ -198,16 +221,19 @@ private final class LocalSplatResources: NSObject, WKURLSchemeHandler {
                    cameraSize > 0, cameraSize < 2048,
                    let cameraData = try? Data(contentsOf: cameraURL),
                    cameraData.count < 2048,
-                   let camera = try? JSONSerialization.jsonObject(with: cameraData) as? [String: Any],
-                   (camera["rotation"] as? [[Int]]) == [[1,0,0],[0,1,0],[0,0,1]] {
-                    script += "window.CAPTURE_SPLAT_CAMERA={rotation:[[1,0,0],[0,1,0],[0,0,1]]};"
-                    if let gravity = camera["gravity_up"] as? [Double], gravity.count == 3,
-                       gravity.allSatisfy({ $0.isFinite }) {
-                        let norm = sqrt(gravity.reduce(0) { $0 + $1 * $1 })
-                        if norm.isFinite, norm > 1e-6, norm < 1e6,
-                           let gravityData = try? JSONSerialization.data(withJSONObject: gravity.map { $0 / norm }),
-                           let gravityJSON = String(data: gravityData, encoding: .utf8) {
-                            script += "window.CAPTURE_SPLAT_CAMERA.gravity_up=\(gravityJSON);"
+                   let camera = try? JSONSerialization.jsonObject(with: cameraData) as? [String: Any] {
+                    if let worldScript = worldCameraScript(camera) {
+                        script += worldScript
+                    } else if (camera["rotation"] as? [[Int]]) == [[1,0,0],[0,1,0],[0,0,1]], camera["convention"] == nil {
+                        script += "window.CAPTURE_SPLAT_CAMERA={rotation:[[1,0,0],[0,1,0],[0,0,1]]};"
+                        if let gravity = camera["gravity_up"] as? [Double], gravity.count == 3,
+                           gravity.allSatisfy({ $0.isFinite }) {
+                            let norm = sqrt(gravity.reduce(0) { $0 + $1 * $1 })
+                            if norm.isFinite, norm > 1e-6, norm < 1e6,
+                               let gravityData = try? JSONSerialization.data(withJSONObject: gravity.map { $0 / norm }),
+                               let gravityJSON = String(data: gravityData, encoding: .utf8) {
+                                script += "window.CAPTURE_SPLAT_CAMERA.gravity_up=\(gravityJSON);"
+                            }
                         }
                     }
                 }

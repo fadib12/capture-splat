@@ -58,3 +58,9 @@ node --check apps/ios/CaptureSplat/CaptureSplat/Resources/SplatViewer/main.js
 
 Build tooling is not executed by the iPhone app. The complete folder is already an
 Xcode resource folder reference; no additional runtime asset route is necessary.
+
+Sensor-aligned RGB-D jobs additionally supply a bounded OpenGL camera rotation and
+position in the preserved ARKit world frame. Native code validates a proper
+orthonormal rotation and finite position, injects numeric values only, and the
+viewer applies that camera without a CV flip. Legacy context-CV imports retain
+their existing one-flip path. Both use the same movement controls.

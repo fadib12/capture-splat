@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--port', type=int, default=8770)
     parser.add_argument('--profile', choices=('small', 'detail'), default='small',
                         help='Pinned pretrained profile; select detail after local GPU validation.')
+    parser.add_argument('--enable-rgbd', action='store_true', help='Enable full-package RGB-D jobs after runtime validation.')
     args = parser.parse_args()
     address = ipaddress.IPv4Address(args.host)
     if not address.is_private or address.is_unspecified or address.is_multicast:
@@ -61,7 +62,13 @@ def main():
     store = BridgeStore(state_dir / 'scans', wsl_worker(repo, args.profile),
                         runtime_ready=lambda: (state_dir / 'runtime-ready.json').is_file(),
                         profile=args.profile)
-    server = HTTPServer((args.host, args.port), handler(store, config['token']))
+    full_store = None
+    if args.enable_rgbd:
+        from capture_splat.full_capture_bridge import FullCaptureStore, rgbd_worker
+        full_store = FullCaptureStore(state_dir / 'full-scans',rgbd_worker(repo),
+                                     runtime_ready=lambda: (state_dir / 'rgbd-runtime-ready.json').is_file())
+        full_store.active = store.active
+    server = HTTPServer((args.host, args.port), handler(store, config['token'], full_store=full_store))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(state_dir / 'cert.pem', state_dir / 'key.pem')

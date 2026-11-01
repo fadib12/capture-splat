@@ -32,6 +32,66 @@ private struct PCConnection: Codable {
     }
 }
 
+private struct PCScanAsset: Sendable {
+    let path: String
+    let url: URL
+    let bytes: Int
+    let sha256: String
+}
+
+private enum PCFullCapture {
+    static let chunkBytes = 4 * 1024 * 1024
+
+    static func prepare(_ directory: URL) throws -> (Data, [PCScanAsset]) {
+        let manager = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
+        guard let enumerator = manager.enumerator(at: directory, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
+        else { throw PCError.invalidCapture }
+        let prefix = directory.standardizedFileURL.path + "/"
+        var assets: [PCScanAsset] = []
+        var total = 0
+        var entries = 0
+        var names = Set<String>()
+        for case let url as URL in enumerator {
+            entries += 1
+            guard entries <= 8192, url.standardizedFileURL.path.hasPrefix(prefix) else { throw PCError.invalidCapture }
+            let values = try url.resourceValues(forKeys: Set(keys))
+            guard values.isSymbolicLink != true else { throw PCError.invalidCapture }
+            let path = String(url.standardizedFileURL.path.dropFirst(prefix.count))
+            guard path.count <= 240, path.split(separator: "/").count <= 6 else { throw PCError.invalidCapture }
+            if values.isDirectory == true { continue }
+            guard values.isRegularFile == true, let size = values.fileSize, size > 0, size <= 2 * 1024 * 1024 * 1024,
+                  path.range(of: "^[A-Za-z0-9_./-]+$", options: .regularExpression) != nil,
+                  names.insert(path.lowercased()).inserted else { throw PCError.invalidCapture }
+            total += size
+            guard total <= 4 * 1024 * 1024 * 1024, assets.count < 4096 else { throw PCError.invalidCapture }
+            let handle = try FileHandle(forReadingFrom: url)
+            var hasher = SHA256()
+            var readBytes = 0
+            do {
+                while let data = try handle.read(upToCount: chunkBytes), !data.isEmpty {
+                    readBytes += data.count
+                    guard readBytes <= size else { throw PCError.invalidCapture }
+                    hasher.update(data: data)
+                }
+                try handle.close()
+            } catch { try? handle.close(); throw error }
+            guard readBytes == size else { throw PCError.invalidCapture }
+            assets.append(PCScanAsset(path: path, url: url, bytes: size,
+                                      sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined()))
+        }
+        assets.sort { $0.path < $1.path }
+        let manifest = try Data(contentsOf: directory.appendingPathComponent("capture.json"))
+        guard manifest.count > 0, manifest.count <= 16 * 1024 * 1024 else { throw PCError.invalidCapture }
+        let descriptor: [String: Any] = ["schema": "capture_splat.full_transfer.v1",
+            "manifest_base64": manifest.base64EncodedString(),
+            "files": assets.map { ["path": $0.path, "bytes": $0.bytes, "sha256": $0.sha256] as [String: Any] }]
+        let body = try JSONSerialization.data(withJSONObject: descriptor, options: [.sortedKeys, .withoutEscapingSlashes])
+        guard body.count <= 24 * 1024 * 1024 else { throw PCError.invalidCapture }
+        return (body, assets)
+    }
+}
+
 private enum PCError: LocalizedError {
     case invalidConnection, rejected, invalidCapture, failed(String)
     var errorDescription: String? {
@@ -121,7 +181,7 @@ final class PCReconstructionClient: ObservableObject {
         if body != nil { req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await session.data(for: req)
         guard let response = response as? HTTPURLResponse, response.statusCode == 200,
-              data.count <= 1024 * 1024,
+              data.count <= 4 * 1024 * 1024,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw PCError.rejected }
         return object
@@ -134,48 +194,63 @@ final class PCReconstructionClient: ObservableObject {
         let session = makeSession(connection)
         defer { session.invalidateAndCancel() }
         do {
-            message = "Preparing scan…"
-            let manifestURL = directory.appendingPathComponent("capture.json")
-            let size = try manifestURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size > 0, size <= 16 * 1024 * 1024 else { throw PCError.invalidCapture }
-            let body = try Data(contentsOf: manifestURL)
-            var state = try await request(session, connection, path: "/v1/scans", method: "POST", body: body)
+            let health = try await request(session, connection, path: "/v1/health")
+            guard (health["features"] as? [String] ?? []).contains("full_capture_v2") else {
+                throw PCError.failed("Update the PC service to receive the complete scan, including video and LiDAR.")
+            }
+            message = "Preparing full scan..."
+            let (body, assets) = try await Task.detached(priority: .userInitiated) {
+                try PCFullCapture.prepare(directory)
+            }.value
+            var state = try await request(session, connection, path: "/v2/scans", method: "POST", body: body)
             guard let id = state["id"] as? String,
                   id.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
-                  let images = state["images"] as? [String], images.count <= 512
+                  let files = state["files"] as? [[String: Any]], files.count == assets.count,
+                  let chunkBytes = state["chunk_bytes"] as? Int, chunkBytes == PCFullCapture.chunkBytes
             else { throw PCError.rejected }
             if state["status"] as? String == "uploading" {
                 let uploaded = state["uploaded"] as? [String: Any] ?? [:]
-                for (index, image) in images.enumerated() {
+                for (index, asset) in assets.enumerated() {
+                    guard files[index]["path"] as? String == asset.path,
+                          files[index]["sha256"] as? String == asset.sha256 else { throw PCError.rejected }
                     if uploaded[String(index)] != nil { continue }
-                    guard image.range(of: "^rgb/[A-Za-z0-9_.-]{1,100}$", options: .regularExpression) != nil
-                    else { throw PCError.invalidCapture }
-                    let source = directory.appendingPathComponent(image)
-                    let imageSize = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                    guard imageSize > 0, imageSize <= 25 * 1024 * 1024 else { throw PCError.invalidCapture }
-                    let data = try Data(contentsOf: source, options: .mappedIfSafe)
-                    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                    message = "Sending scan: \(index + 1) of \(images.count) images"
-                    var req = URLRequest(url: URL(string: connection.url + "/v1/scans/\(id)/images/\(index)")!)
-                    req.httpMethod = "PUT"
-                    req.setValue("Bearer " + connection.token, forHTTPHeaderField: "Authorization")
-                    req.setValue(digest, forHTTPHeaderField: "X-Content-SHA256")
-                    let (_, response) = try await session.upload(for: req, fromFile: source)
-                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw PCError.rejected }
+                    let handle = try FileHandle(forReadingFrom: asset.url)
+                    do {
+                        var part = 0
+                        var total = 0
+                        var hasher = SHA256()
+                        while let data = try handle.read(upToCount: chunkBytes), !data.isEmpty {
+                            total += data.count
+                            guard total <= asset.bytes else { throw PCError.invalidCapture }
+                            hasher.update(data: data)
+                            message = "Sending full scan: \(index + 1) of \(assets.count) files"
+                            var req = URLRequest(url: URL(string: connection.url + "/v2/scans/\(id)/files/\(index)/chunks/\(part)")!)
+                            req.httpMethod = "PUT"
+                            req.setValue("Bearer " + connection.token, forHTTPHeaderField: "Authorization")
+                            req.setValue(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), forHTTPHeaderField: "X-Content-SHA256")
+                            let (_, response) = try await session.upload(for: req, from: data)
+                            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw PCError.rejected }
+                            part += 1
+                        }
+                        try handle.close()
+                        guard total == asset.bytes,
+                              hasher.finalize().map({ String(format: "%02x", $0) }).joined() == asset.sha256
+                        else { throw PCError.invalidCapture }
+                    } catch { try? handle.close(); throw error }
                 }
-                state = try await request(session, connection, path: "/v1/scans/\(id)/run", method: "POST")
+                state = try await request(session, connection, path: "/v2/scans/\(id)/run", method: "POST")
             }
             while state["status"] as? String == "processing" {
                 message = "Reconstructing on your PC… Keep the app open."
                 try await Task.sleep(nanoseconds: 5_000_000_000)
-                state = try await request(session, connection, path: "/v1/scans/\(id)")
+                state = try await request(session, connection, path: "/v2/scans/\(id)")
             }
             guard state["status"] as? String == "completed",
                   let digest = state["result_sha256"] as? String,
                   let bytes = state["result_bytes"] as? Int, bytes > 0, bytes <= 64 * 1024 * 1024
             else { throw PCError.failed(state["message"] as? String ?? "Reconstruction failed.") }
             message = "Downloading splat…"
-            var req = URLRequest(url: URL(string: connection.url + "/v1/scans/\(id)/model")!)
+            var req = URLRequest(url: URL(string: connection.url + "/v2/scans/\(id)/model")!)
             req.setValue("Bearer " + connection.token, forHTTPHeaderField: "Authorization")
             let (temporary, response) = try await session.download(for: req)
             defer { try? FileManager.default.removeItem(at: temporary) }
@@ -233,7 +308,7 @@ struct PCReconstructionView: View {
                     if client.configured, let directory {
                         Button("Create splat on PC") { Task { await client.reconstruct(directory: directory) } }
                             .disabled(client.busy)
-                        Text("Sends this saved scan’s images and cameras to your PC. Keep this app open until the result downloads.")
+                        Text("Sends this complete saved scan, including video, LiDAR and cameras, to your PC. Keep this app open until the result downloads.")
                     }
                     if let model = client.completedModel {
                         Button("Open room splat") { openModel(model) }

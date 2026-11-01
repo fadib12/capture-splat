@@ -364,3 +364,26 @@ def test_prepare_capture_reports_person_mask_resizing(tmp_path: Path) -> None:
 
     resized = summary["valid_masks"]["records"][0]["resized_sources"]
     assert resized == [{"source": "person", "from": [8, 6], "to": [16, 12]}]
+
+
+def test_video_supplement_budget_spans_the_clip_instead_of_only_its_start(tmp_path,monkeypatch):
+    capture=_capture(tmp_path/'capture',count=1)
+    (capture/'video').mkdir();(capture/'video/capture.mov').write_bytes(b'video')
+    (capture/'metadata').mkdir();(capture/'metadata/frame_index.jsonl').write_text('{}\n')
+    def extract(video,out_dir,**kwargs):
+        frames=[]
+        for i in range(10):
+            image=out_dir/'images'/f'{i:06d}.jpg';image.parent.mkdir(parents=True,exist_ok=True)
+            Image.new('RGB',(16,12),(40,80,120)).save(image)
+            frames.append({'rgb':image.relative_to(out_dir).as_posix(),'timestamp':102.+i,
+                           'timestamp_domain':'ar_session','accepted':True,
+                           'transform_matrix':[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+                           'intrinsics':{'fl_x':8,'fl_y':8,'cx':4,'cy':3,'w':16,'h':12}})
+        write_json_strict(out_dir/'capture.json',{'schema':'capture_splat.v0.2','frames':frames})
+        return {'extracted_frames':10}
+    monkeypatch.setattr('capture_splat.prepare_capture.run_extract_frames',extract)
+    summary=prepare_capture(capture,tmp_path/'prepared',target_frames=3)
+    result=load_json_strict(tmp_path/'prepared/frames/capture.json')
+    times=[f['timestamp'] for f in result['frames'] if f['source_kind']=='continuous_video']
+    assert len(times)==2 and max(times)>=107
+    assert summary['accepted_rgbd_frames']==1

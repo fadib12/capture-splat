@@ -161,7 +161,7 @@ class BridgeStore:
 
     def state(self, identifier: str) -> dict:
         with self.state_io:
-            return strict_json(_bounded_file(self.folder(identifier) / 'state.json', self.root, 1024**2))
+            return strict_json(_bounded_file(self.folder(identifier) / 'state.json', self.root, 4*1024**2))
 
     def save(self, identifier: str, state: dict):
         with self.state_io:
@@ -270,7 +270,7 @@ class BridgeStore:
             raise ValueError('PC is reconstructing another scan. Try again after it finishes.')
         try:
             self._verified_uploads(identifier, state)
-            state.update(status='processing', message='ReSplat is reconstructing your scan.')
+            state.update(status='processing', message='Reconstructing the full RGB-D scan.' if self.profile == 'rgbd' else 'ReSplat is reconstructing your scan.')
             self.save(identifier, state)
             threading.Thread(target=self._run, args=(identifier,), daemon=True).start()
         except Exception:
@@ -363,9 +363,15 @@ def wsl_worker(repo: Path, profile: str = 'small'):
     return run
 
 
-def handler(store: BridgeStore, token: str):
+def handler(store: BridgeStore, token: str, full_store=None):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.0'
+
+        def scan_store(self):
+            if self.path.startswith('/v2/'):
+                if full_store is None: raise ValueError('Full capture transfer is unavailable.')
+                return full_store
+            return store
 
         def setup(self):
             super().setup()
@@ -404,11 +410,11 @@ def handler(store: BridgeStore, token: str):
         def do_POST(self):
             if not self.authorized(): return
             try:
-                if self.path == '/v1/scans':
-                    return self.reply(200, store.create(self.body(16 * 1024**2)))
-                match = re.fullmatch(r'/v1/scans/([0-9a-f]{64})/run', self.path)
+                if self.path in {'/v1/scans','/v2/scans'}:
+                    return self.reply(200, self.scan_store().create(self.body(24 * 1024**2)))
+                match = re.fullmatch(r'/v[12]/scans/([0-9a-f]{64})/run', self.path)
                 if match:
-                    return self.reply(200, store.start(match[1]))
+                    return self.reply(200, self.scan_store().start(match[1]))
                 self.reply(404, {'error': 'Unknown endpoint.'})
             except (ValueError, OSError, KeyError, TypeError):
                 self.close_connection = True
@@ -417,10 +423,15 @@ def handler(store: BridgeStore, token: str):
         def do_PUT(self):
             if not self.authorized(): return
             try:
+                full = re.fullmatch(r'/v2/scans/([0-9a-f]{64})/files/([0-9]{1,4})/chunks/([0-9]{1,3})',self.path)
+                if full:
+                    from .full_capture_bridge import CHUNK_BYTES
+                    self.scan_store().upload_chunk(full[1],int(full[2]),int(full[3]),self.body(CHUNK_BYTES),self.headers.get('X-Content-SHA256'))
+                    return self.reply(200,{'uploaded':True})
                 match = re.fullmatch(r'/v1/scans/([0-9a-f]{64})/images/([0-9]{1,3})', self.path)
                 if not match: raise ValueError('Invalid image endpoint.')
                 identifier, index = match[1], int(match[2])
-                state = store.state(identifier)
+                state = self.scan_store().state(identifier)
                 if state['status'] != 'uploading' or index >= len(state['images']):
                     raise ValueError('Upload is closed or unknown image.')
                 body = self.body(25 * 1024**2)
@@ -433,10 +444,10 @@ def handler(store: BridgeStore, token: str):
                 if old and old['sha256'] != digest:
                     raise ValueError('Immutable image already uploaded.')
                 if not old:
-                    path = store.folder(identifier) / 'capture' / state['images'][index]
+                    path = self.scan_store().folder(identifier) / 'capture' / state['images'][index]
                     with path.open('xb') as f: f.write(body)
                     state['uploaded'][str(index)] = {'bytes': len(body), 'sha256': digest}
-                    store.save(identifier, state)
+                    self.scan_store().save(identifier, state)
                 self.reply(200, {'uploaded': True})
             except (ValueError, OSError, KeyError, TypeError):
                 self.close_connection = True
@@ -447,16 +458,17 @@ def handler(store: BridgeStore, token: str):
             try:
                 if self.path == '/v1/health':
                     return self.reply(200, {'engine': 'resplat', 'scope': 'single_operator_pc_trial',
-                                            'profile': store.profile, 'pipeline_revision': store.pipeline_revision})
-                match = re.fullmatch(r'/v1/scans/([0-9a-f]{64})(/model)?', self.path)
+                                            'profile': store.profile, 'pipeline_revision': self.scan_store().pipeline_revision,
+                                            'features': ['full_capture_v2'] if full_store is not None else []})
+                match = re.fullmatch(r'/v[12]/scans/([0-9a-f]{64})(/model)?', self.path)
                 if not match: return self.reply(404, {'error': 'Unknown endpoint.'})
-                state = store.state(match[1])
+                state = self.scan_store().state(match[1])
                 if not match[2]: return self.reply(200, state)
                 if state['status'] != 'completed':
                     return self.reply(409, {'error': 'Model not ready.'})
-                if state.get('pipeline_revision') != store.pipeline_revision:
+                if state.get('pipeline_revision') != self.scan_store().pipeline_revision:
                     return self.reply(409, {'error': 'Resubmit the scan to upgrade its reconstruction.'})
-                model = store.model_bytes(match[1], state)
+                model = self.scan_store().model_bytes(match[1], state)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/octet-stream')
                 self.send_header('Content-Length', str(len(model)))

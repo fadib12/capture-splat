@@ -2,3 +2,5 @@ contracts/live-session/v0.1/** text eol=lf
 contracts/live-session/v0.2/** text eol=lf
 contracts/live-auth/v0.1/** text eol=lf
 scripts/setup_resplat_wsl.sh text eol=lf
+
+scripts/setup_rgbd_wsl.sh text eol=lf

@@ -305,7 +305,15 @@ async function openRoom() {
     camera = new THREE.PerspectiveCamera(60, 1, .02, 1000);
     // Desktop jobs are in the context camera's CV frame: +X right,+Y down,+Z forward.
     // Three uses +Y up,-Z forward. Rotate only the camera, never the model twice.
-    if (window.CAPTURE_SPLAT_CAMERA) {
+    const suppliedCamera = window.CAPTURE_SPLAT_CAMERA;
+    if (suppliedCamera?.convention === "opengl") {
+      const r = suppliedCamera.rotation;
+      camera.position.fromArray(suppliedCamera.position);
+      camera.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(
+        r[0][0], r[0][1], r[0][2], 0,
+        r[1][0], r[1][1], r[1][2], 0,
+        r[2][0], r[2][1], r[2][2], 0, 0, 0, 0, 1));
+    } else if (suppliedCamera) {
       worldUp.set(0, -1, 0);
       camera.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
       const gravity = window.CAPTURE_SPLAT_CAMERA.gravity_up;

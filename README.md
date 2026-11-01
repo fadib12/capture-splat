@@ -23,6 +23,15 @@ It is not a guarantee that every scan becomes high quality. Good splats still de
 
 For the current carry-forward lessons from the iPhone-to-VkSplat validation ladder, see `docs/field_validation_learnings.md`.
 
+## Full capture to a private PC
+
+The experimental full-package path now preserves video, calibration, LiDAR depth,
+confidence, captured geometry and context files during pinned-TLS transfer. A
+pinned external gsplat trainer uses video/RGB views, sensor/mesh initialization
+and measured confidence-filtered depth loss. See [the RGB-D PC contract](docs/full_capture_rgbd.md)
+for consumption receipts, limits, setup and the separate visual-quality gate.
+Local finalization and Manual Export remain the production capture path.
+
 ## World Compiler Roadmap
 
 Capture Splat is the evidence-producing capture and reconstruction side of the

@@ -456,10 +456,11 @@ def prepare_capture(
                 if any(item.timestamp_domain != "ar_session" for item in extracted):
                     warnings.append("video_index_missing_ar_timestamp_cross_source_dedup_unavailable")
                 for item in extracted:
-                    if len(accepted) + len(supplements) >= target:
-                        break
                     if not _duplicate(item, accepted + excluded + supplements, dedup_tolerance_seconds):
                         supplements.append(item)
+                # Preserve later room passes instead of filling the supplement
+                # budget with only the beginning of the video.
+                supplements = _downselect_candidates(supplements, max(0, target - len(accepted)))
             else:
                 warnings.append("video_frame_pose_attachment_empty")
         elif not subject_masks_required and len(accepted) < target:
