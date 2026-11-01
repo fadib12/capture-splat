@@ -258,6 +258,12 @@ final class PCReconstructionClient: ObservableObject {
             message = "Downloading splat…"
             var req = URLRequest(url: URL(string: connection.url + "/v2/scans/\(id)/model")!)
             req.setValue("Bearer " + connection.token, forHTTPHeaderField: "Authorization")
+            // URLSession decodes gzip into the temporary file. Verify the
+            // decoded bytes against the original model digest below.
+            req.setValue("gzip-v1", forHTTPHeaderField: "X-CaptureSplat-Transport")
+            if let profile = state["viewer_profile"] as? String, profile != "classic-depth-v1" {
+                throw PCError.failed("This reconstruction needs a newer viewer.")
+            }
             let (temporary, response) = try await session.download(for: req)
             defer { try? FileManager.default.removeItem(at: temporary) }
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw PCError.rejected }

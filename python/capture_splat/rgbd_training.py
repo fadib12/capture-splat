@@ -59,7 +59,7 @@ def sensor_samples(root,frame,K,image_size,maximum=4096):
     return points[inside].astype(np.float32),depths[ys,xs][inside].astype(np.float32),consumed
 
 
-def prepare_rgbd(capture,out,target_frames=300):
+def prepare_rgbd(capture,out,target_frames=300,max_edge=3840):
     capture=Path(capture).resolve();out=Path(out).resolve()
     if out.exists():raise ValueError('Use a fresh RGB-D output directory.')
     if out.is_relative_to(capture):raise ValueError('Output must be outside original capture.')
@@ -78,7 +78,7 @@ def prepare_rgbd(capture,out,target_frames=300):
     out.mkdir(parents=True)
     scratch=out/'scratch';scratch.mkdir()
     previous=tempfile.tempdir;tempfile.tempdir=str(scratch)
-    try: summary=prepare_capture(capture,out/'prepared',target_frames=target_frames,max_edge=1920)
+    try: summary=prepare_capture(capture,out/'prepared',target_frames=target_frames,max_edge=max_edge)
     finally:tempfile.tempdir=previous
     frames_root=out/'prepared/frames';data=load_capture(frames_root)
     parsed=list(iter_frames(data,accepted_only=True))

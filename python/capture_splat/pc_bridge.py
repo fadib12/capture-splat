@@ -4,6 +4,7 @@ Local job state describes execution only, never quality or World Studio promotio
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -469,7 +470,14 @@ def handler(store: BridgeStore, token: str, full_store=None):
                 if state.get('pipeline_revision') != self.scan_store().pipeline_revision:
                     return self.reply(409, {'error': 'Resubmit the scan to upgrade its reconstruction.'})
                 model = self.scan_store().model_bytes(match[1], state)
+                # Opt-in, lossless wire compression. Digests and size limits
+                # always bind the decoded original model, including all SH bands.
+                compressed = self.headers.get('X-CaptureSplat-Transport') == 'gzip-v1'
+                if compressed:
+                    model = gzip.compress(model, compresslevel=1, mtime=0)
                 self.send_response(200)
+                if compressed:
+                    self.send_header('Content-Encoding', 'gzip')
                 self.send_header('Content-Type', 'application/octet-stream')
                 self.send_header('Content-Length', str(len(model)))
                 self.send_header('X-Content-SHA256', state['result_sha256'])

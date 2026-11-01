@@ -168,6 +168,12 @@ class FullCaptureStore(BridgeStore):
             or report.get('depth_loss_differentiable') is not True or not report.get('video_training_images')
             or report['source_manifest_sha256']!=_bounded_digest(folder/'capture/capture.json',self.root,16*1024**2)):
             raise ValueError('Trainer did not bind sensor consumption.')
+        if report.get('camera_alignment_sha256'):
+            alignment = _bounded_file(folder/'result/camera-alignment.json',self.root,4*1024**2)
+            if hashlib.sha256(alignment).hexdigest()!=report['camera_alignment_sha256']:
+                raise ValueError('Consumed alignment binding changed.')
+            if report.get('data_factor') not in (1,2) or report.get('viewer_profile')!='classic-depth-v1':
+                raise ValueError('Unsupported calibrated training profile.')
         return model,'ply',report_digest
 
 
@@ -179,6 +185,8 @@ class FullCaptureStore(BridgeStore):
             state.update(status='completed',message='RGB-D reconstruction ready for review; quality not verified.',
                          result_sha256=hashlib.sha256(model).hexdigest(),result_bytes=len(model),
                          result_format='ply',result_path='inference/gaussians.ply',
+                         viewer_profile=receipt.get('viewer_profile','classic-depth-v1'),
+                         training_resolution_factor=receipt.get('training_resolution_factor',2),
                          training_consumption_sha256=report_digest,viewer_camera=receipt['viewer_camera'])
             self.save(identifier,state)
         except Exception as exc:

@@ -42,6 +42,28 @@ struct PreviewReservoirProbe {
         precondition(lockPreview.usesDepth && !lockPreview.usesCaptureSensors && !lockPreview.showsGuidance)
         let cameraOnly = CaptureRuntimePolicy(phase: .recording, needsDepthLock: false, guidanceRequested: false)
         precondition(!cameraOnly.showsGuidance && cameraOnly.usesDepth && cameraOnly.usesCaptureSensors)
+        var coverage = RoomSurfaceCoverage(capacity: 32)
+        let surface = SIMD3<Float>(0, 0, -2)
+        for _ in 0..<30 {
+            coverage.observe(camera: .zero, forwardY: 0, points: [surface])
+        }
+        precondition(coverage.observedCells == 1 && coverage.multiViewCells == 0,
+                     "Stationary repeated frames must not count as another viewpoint")
+        precondition(coverage.nextAction?.contains("Tilt up") == true)
+        for _ in 0..<3 { coverage.observe(camera: .zero, forwardY: 0.5, points: [surface]) }
+        precondition(coverage.nextAction?.contains("Tilt down") == true)
+        for _ in 0..<3 { coverage.observe(camera: .zero, forwardY: -0.5, points: [surface]) }
+        precondition(coverage.nextAction?.contains("Side-step") == true)
+        coverage.observe(camera: SIMD3<Float>(0.4, 0, 0), forwardY: 0, points: [surface])
+        precondition(coverage.multiViewCells == 1)
+        let before = coverage.acceptedViews
+        coverage.observe(camera: .zero, forwardY: 0, points: [SIMD3<Float>(.nan, 0, 0), SIMD3<Float>(1e30, 0, 0)])
+        precondition(coverage.acceptedViews == before)
+        for i in 0..<100 {
+            coverage.observe(camera: SIMD3<Float>(Float(i), 0, 0), forwardY: 0,
+                             points: [SIMD3<Float>(Float(i), 0, -2)])
+        }
+        precondition(coverage.observedCells == 32, "Coverage memory must remain bounded")
         print("Preview reservoir and repeated capture lifecycle checks passed")
     }
 }

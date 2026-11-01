@@ -299,7 +299,8 @@ function dispose() {
 
 async function openRoom() {
   try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance",
+      preserveDrawingBuffer: window.CAPTURE_SPLAT_DIAGNOSTICS === true });
     renderer.setClearColor(0x101216, 1);
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(60, 1, .02, 1000);
@@ -327,7 +328,7 @@ async function openRoom() {
     camera.lookAt(orbitTarget.copy(camera.position).add(lookForward));
     homePosition.copy(camera.position);
     homeQuaternion.copy(camera.quaternion);
-    spark = new SparkRenderer({ renderer, onDirty: requestRender, enableLod: false, sortRadial: true, minSortIntervalMs: 24 });
+    spark = new SparkRenderer({ renderer, onDirty: requestRender, enableLod: false, sortRadial: false, preBlurAmount: 0.3, blurAmount: 0, minSortIntervalMs: 24 });
     scene.add(spark);
     pointer = new PointerControls({ canvas, rotateSpeed: .0025, reverseRotate: false,
       slideSpeed: .002, scrollSpeed: .001, moveInertia: .08, rotateInertia: .07,
@@ -357,6 +358,43 @@ async function openRoom() {
         renderSize: renderer.getDrawingBufferSize(new THREE.Vector2()).toArray(),
         homePosition: homePosition.toArray(), homeQuaternion: homeQuaternion.toArray() })
     }) });
+    // Available only in an explicitly instrumented local parity page. Native
+    // product pages never enable this calibration/test interface.
+    if (window.CAPTURE_SPLAT_DIAGNOSTICS === true) {
+      window.captureSplatParity = async ({ width, height, K, c2w, preBlurAmount = 0,
+        blurAmount = .3, sortRadial = true, focalAdjustment = 1 }) => {
+        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 16 || height < 16 ||
+          width > 3840 || height > 3840 || width * height > 8_294_400 ||
+          !K?.flat().every(Number.isFinite) || !c2w?.flat().every(Number.isFinite)) {
+          throw new Error("Invalid calibration.");
+        }
+        renderer.setAnimationLoop(null);
+        clearInput();
+        renderer.setPixelRatio(1);
+        renderer.setSize(width, height, false);
+        renderer.setClearColor(0, 1);
+        camera.position.set(c2w[0][3], c2w[1][3], c2w[2][3]);
+        camera.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(
+          c2w[0][0], c2w[0][1], c2w[0][2], 0,
+          c2w[1][0], c2w[1][1], c2w[1][2], 0,
+          c2w[2][0], c2w[2][1], c2w[2][2], 0, 0, 0, 0, 1));
+        camera.near = .01; camera.far = 100;
+        const n = camera.near, f = camera.far;
+        camera.projectionMatrix.set(2 * K[0][0] / width, 0, 1 - 2 * K[0][2] / width, 0,
+          0, 2 * K[1][1] / height, 2 * K[1][2] / height - 1, 0,
+          0, 0, -(f + n) / (f - n), -2 * f * n / (f - n), 0, 0, -1, 0);
+        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+        camera.updateMatrixWorld(true);
+        Object.assign(spark, { preBlurAmount, blurAmount, sortRadial, focalAdjustment });
+        for (let i = 0; i < 5; i++) {
+          await spark.update({ scene, camera });
+          renderer.render(scene, camera);
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+        renderer.render(scene, camera);
+        return canvas.toDataURL("image/png");
+      };
+    }
   } catch (error) {
     console.error("Room viewer:", error);
     $("loading").hidden = false;

@@ -289,3 +289,76 @@ struct CaptureRuntimePolicy {
     var usesDepth: Bool { usesCaptureSensors || needsDepthLock }
     var showsGuidance: Bool { phase == .recording && guidanceRequested }
 }
+
+
+// Bounded evidence from accepted, confidence-filtered RGB-D frames only.
+// This measures observed samples, never unseen room completeness.
+struct RoomSurfaceCoverage {
+    private struct Cell {
+        let firstCamera: SIMD3<Float>
+        let firstRay: SIMD3<Float>
+        var hasBaseline = false
+        var hasNearView = false
+    }
+    private var cells: [String: Cell] = [:]
+    private(set) var acceptedViews = 0
+    private(set) var upwardViews = 0
+    private(set) var downwardViews = 0
+    private(set) var nearViews = 0
+    private(set) var farViews = 0
+    let capacity: Int
+    init(capacity: Int = 4000) { self.capacity = max(0, min(capacity, 4000)) }
+    var observedCells: Int { cells.count }
+    var multiViewCells: Int { cells.values.filter { $0.hasBaseline }.count }
+    var detailCells: Int { cells.values.filter { $0.hasNearView }.count }
+    private func length(_ value: SIMD3<Float>) -> Float {
+        sqrt(value.x * value.x + value.y * value.y + value.z * value.z)
+    }
+    mutating func observe(camera: SIMD3<Float>, forwardY: Float, points: [SIMD3<Float>]) {
+        guard camera.x.isFinite, camera.y.isFinite, camera.z.isFinite, forwardY.isFinite else { return }
+        var distances: [Float] = []
+        for point in points.prefix(48) {
+            guard point.x.isFinite, point.y.isFinite, point.z.isFinite,
+                  abs(point.x) < 10000, abs(point.y) < 10000, abs(point.z) < 10000 else { continue }
+            let offset = camera - point
+            let distance = length(offset)
+            guard distance >= 0.15, distance <= 6 else { continue }
+            distances.append(distance)
+            let key = "\(Int(floor(point.x / 0.25))),\(Int(floor(point.y / 0.25))),\(Int(floor(point.z / 0.25)))"
+            let ray = offset / distance
+            if var cell = cells[key] {
+                let dot = ray.x * cell.firstRay.x + ray.y * cell.firstRay.y + ray.z * cell.firstRay.z
+                // At least 15 cm and five degrees: repeated stationary frames
+                // and a rotation at the same optical centre do not add support.
+                if length(camera - cell.firstCamera) >= 0.15 && dot <= 0.9961947 {
+                    cell.hasBaseline = true
+                }
+                cell.hasNearView = cell.hasNearView || distance <= 1.8
+                cells[key] = cell
+            } else if cells.count < capacity {
+                cells[key] = Cell(firstCamera: camera, firstRay: ray, hasNearView: distance <= 1.8)
+            }
+        }
+        guard !distances.isEmpty else { return }
+        acceptedViews = min(acceptedViews + 1, 100000)
+        if forwardY > 0.25 { upwardViews = min(upwardViews + 1, 100000) }
+        if forwardY < -0.25 { downwardViews = min(downwardViews + 1, 100000) }
+        distances.sort()
+        let median = distances[distances.count / 2]
+        if median <= 1.8 { nearViews = min(nearViews + 1, 100000) }
+        if median >= 2.4 { farViews = min(farViews + 1, 100000) }
+    }
+    var nextAction: String? {
+        guard acceptedViews >= 12 else { return nil }
+        if upwardViews < 3 { return "Tilt up slowly; include ceiling edges" }
+        if downwardViews < 3 { return "Tilt down slowly; include floor edges" }
+        if acceptedViews >= 24, multiViewCells * 3 < observedCells {
+            return "Side-step 20-40 cm; keep the same surface in view"
+        }
+        if farViews > 8, nearViews < 6 { return "Add a closer, overlapping detail pass" }
+        return nil
+    }
+    var detail: String {
+        "\(multiViewCells) of \(observedCells) observed cells have another viewpoint. Unseen areas remain unknown."
+    }
+}

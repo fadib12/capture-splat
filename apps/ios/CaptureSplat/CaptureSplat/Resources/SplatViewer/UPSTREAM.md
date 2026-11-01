@@ -64,3 +64,15 @@ position in the preserved ARKit world frame. Native code validates a proper
 orthonormal rotation and finite position, injects numeric values only, and the
 viewer applies that camera without a CV flip. Legacy context-CV imports retain
 their existing one-flip path. Both use the same movement controls.
+
+
+The local RGB-D trainer uses classic gsplat rasterization. The bundled viewer
+uses `preBlurAmount=0.3`, `blurAmount=0`, and depth sorting (`sortRadial=false`).
+Eight calibrated views of the same SH3 PLY measured mean browser/trainer PSNR
+42.20 dB (worst 41.06), compared with 35.69 dB using the former radial profile.
+This is renderer consistency on one room, not source-photo reconstruction quality
+or physical iPhone acceptance. `scripts/check_viewer_parity.py` binds the model,
+reference PNGs and browser canvases. Its optional diagnostic interface exists
+only when a local harness explicitly sets `CAPTURE_SPLAT_DIAGNOSTICS=true` before
+loading the bundle; the app does not enable it. Different rasterization profiles
+need their own measured viewer contract before connecting them to this viewer.

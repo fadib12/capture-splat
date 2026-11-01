@@ -15,7 +15,7 @@ from capture_splat.json_utils import load_json_strict
 SOURCE_SHA='79319e1cd7404e4d1ba0c425634235c39e6054f0643b904a01feea6179462c05'
 
 
-def run(out,steps):
+def run(out,steps,data_factor=1):
     import subprocess
     upstream_root=ROOT/'external/gsplat-rgbd'
     if subprocess.check_output(['git','-C',str(upstream_root),'rev-parse','HEAD'],text=True).strip()!=TRAINER_COMMIT:
@@ -30,7 +30,18 @@ def run(out,steps):
     torch.set_num_threads(2)
     frames_root=out/'prepared/frames'
     source_capture=load_json_strict(frames_root/'metadata/source_capture.json')
-    index=load_json_strict(out/'dataset/sensor-index.json')['frames']
+    index_path=out/'dataset/sensor-index.json'
+    index=load_json_strict(index_path)['frames']
+    alignment_path=out/'camera-alignment.json'
+    alignment=load_json_strict(alignment_path) if alignment_path.exists() else None
+    if alignment:
+        if alignment['index_sha256']!=sha256(index_path):raise ValueError('Alignment index binding changed.')
+        for name,digest in alignment['image_sha256'].items():
+            if sha256(out/'dataset/images'/name)!=digest:raise ValueError('Alignment image binding changed.')
+        for name,digest in alignment['sensor_assets'].items():
+            if sha256(frames_root/name)!=digest:raise ValueError('Alignment depth binding changed.')
+        if sha256(out/'dataset'/alignment['seed_path'])!=alignment['seed_sha256']:
+            raise ValueError('Aligned initialization changed.')
     ledger={'depth_loss_steps':0,'depth_samples_consumed':0,'depth_loss_sum':0.,
             'sensor_assets':{},'training_images':{},'video_training_images':[],
             'depth_loss_differentiable':True}
@@ -43,7 +54,7 @@ def run(out,steps):
             self.image_names=sorted(index);self.image_paths=[];self.camera_ids=[]
             self.Ks_dict={};self.params_dict={};self.mask_dict={};self.imsize_dict={}
             poses=[]
-            cache=out/'dataset/images_sensor_scaled';cache.mkdir(exist_ok=True)
+            cache=out/f'dataset/images_sensor_factor_{factor}';cache.mkdir(exist_ok=True)
             for i,name in enumerate(self.image_names):
                 frame=index[name];intr=frame['intrinsics'];source=out/'dataset/images'/name
                 with Image.open(source) as image:
@@ -51,13 +62,17 @@ def run(out,steps):
                     size=(original_size[0]//factor,original_size[1]//factor)
                     target=cache/(Path(name).stem+'.png')
                     if not target.exists():image.convert('RGB').resize(size,Image.Resampling.BICUBIC).save(target)
+                    with Image.open(target) as cached:
+                        if cached.size!=size:raise ValueError('Cached image resolution differs from training configuration.')
                 K=np.array([[intr['fl_x']*size[0]/intr['w'],0,intr['cx']*size[0]/intr['w']],
                             [0,intr['fl_y']*size[1]/intr['h'],intr['cy']*size[1]/intr['h']],[0,0,1.]])
                 self.image_paths.append(str(target));self.camera_ids.append(i);self.Ks_dict[i]=K
                 self.params_dict[i]=np.empty(0);self.mask_dict[i]=None;self.imsize_dict[i]=size
-                poses.append(np.asarray(frame['transform_matrix'])@ARKIT_TO_OPENCV_CAMERA)
+                pose=alignment['corrected_c2w'].get(name,frame['transform_matrix']) if alignment else frame['transform_matrix']
+                poses.append(np.asarray(pose)@ARKIT_TO_OPENCV_CAMERA)
             self.camtoworlds=np.stack(poses).astype(np.float32)
-            values=np.loadtxt(out/'dataset/sparse/0/points3D.txt',comments='#',usecols=(1,2,3,4,5,6))
+            seed=out/'dataset'/alignment['seed_path'] if alignment else out/'dataset/sparse/0/points3D.txt'
+            values=np.loadtxt(seed,comments='#',usecols=(1,2,3,4,5,6))
             self.points=values[:,:3].astype(np.float32);self.points_rgb=values[:,3:].astype(np.uint8)
             self.points_err=np.zeros(len(values),np.float32);self.transform=np.eye(4)
             self.point_indices={name:np.empty(0,np.int32) for name in self.image_names}
@@ -140,7 +155,7 @@ def run(out,steps):
         setattr(module.Runner,method.name,namespace[method.name])
     if changes['depth_guard']!=1 or changes['loaders']!=2:raise ValueError('Pinned sensor adapter boundary changed.')
     cfg=module.Config(disable_viewer=True,data_dir=str(out/'dataset'),result_dir=str(out/'training'),
-                      data_factor=2,normalize_world_space=False,depth_loss=True,depth_lambda=.1,
+                      data_factor=data_factor,normalize_world_space=False,depth_loss=True,depth_lambda=.1,
                       packed=True,save_ply=True,disable_video=True,random_bkgd=False,
                       eval_steps=[30000],save_steps=[30000],ply_steps=[30000],tb_every=100,
                       strategy=module.MCMCStrategy(cap_max=200000,verbose=False),
@@ -154,11 +169,16 @@ def run(out,steps):
     ledger.update(trainer_commit=TRAINER_COMMIT,trainer_source_sha256=SOURCE_SHA,
                   adapter='measured_depth_samples_v1',depth_objective='metric_Huber_beta_0.1m; empty/nonfinite rays excluded',depth_units='meters_optical_z',confidence_minimum=1,
                   sparse_colmap_depth_fallback=False,steps=steps,normal_supervision_applied=False,
-                  world_normalization_applied=False)
+                  world_normalization_applied=False,data_factor=data_factor,
+                  training_cache=f'images_sensor_factor_{data_factor}',
+                  camera_alignment_sha256=sha256(alignment_path) if alignment else None,
+                  corrected_cameras_consumed=len(alignment['corrected_c2w']) if alignment else 0,
+                  rasterization='classic',viewer_profile='classic-depth-v1')
     (out/'training-ledger.json').write_text(json.dumps(ledger,indent=2,allow_nan=False))
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--out',type=Path,required=True)
-    p.add_argument('--steps',type=int,default=3000);args=p.parse_args()
+    p.add_argument('--steps',type=int,default=7000)
+    p.add_argument('--data-factor',type=int,choices=(1,2),default=1);args=p.parse_args()
     if not 10<=args.steps<=15000:p.error('Steps must be 10..15000.')
-    run(args.out.resolve(),args.steps)
+    run(args.out.resolve(),args.steps,args.data_factor)

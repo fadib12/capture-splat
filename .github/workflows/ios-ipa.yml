@@ -49,6 +49,18 @@ jobs:
           xcrun swiftc "$RUNNER_TEMP/FullCapture.swift" tests/swift/FullCaptureTransferProbe.swift -o "$RUNNER_TEMP/full-capture-probe"
           "$RUNNER_TEMP/full-capture-probe"
 
+      - name: Validate lossless native model transfer
+        run: |
+          python3 tests/http_gzip_fixture.py "$RUNNER_TEMP/gzip-port" &
+          FIXTURE_PID=$!
+          trap 'kill "$FIXTURE_PID"' EXIT
+          for ATTEMPT in 1 2 3 4 5; do
+            test -f "$RUNNER_TEMP/gzip-port" && break
+            sleep 1
+          done
+          xcrun swiftc -parse-as-library tests/swift/LosslessDownloadProbe.swift -o "$RUNNER_TEMP/lossless-download-probe"
+          "$RUNNER_TEMP/lossless-download-probe" "$(cat "$RUNNER_TEMP/gzip-port")"
+
       - name: Build unsigned iPhone app
         run: |
           set -euo pipefail
@@ -69,8 +81,8 @@ jobs:
           test -f "$APP_PATH/SplatViewer/LICENSE"
           test -f "$APP_PATH/SplatViewer/THREE-LICENSE"
           /usr/libexec/PlistBuddy -c "Add :CaptureSplatBuildCommit string $GITHUB_SHA" "$APP_PATH/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.8"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "11"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.9"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "12"
           mkdir -p "$RUNNER_TEMP/package/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
           cd "$RUNNER_TEMP/package"

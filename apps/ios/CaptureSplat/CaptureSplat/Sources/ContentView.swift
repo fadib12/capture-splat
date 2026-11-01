@@ -1536,6 +1536,10 @@ struct ContentView: View {
         if capture.captureBlockerStatus != "Clear" {
             return capture.captureBlockerStatus
         }
+        if capture.isRecording, ["room_walkthrough", "full_room_semantic"].contains(capture.captureIntent),
+           capture.trackingStatus == "normal",
+           !["Hold", "Not ready"].contains(capture.readinessState),
+           let action = capture.roomSurfaceAction { return action }
         if scanMode == .roomWalk {
             return capture.colmapCoachAction
         }
@@ -1545,6 +1549,11 @@ struct ContentView: View {
     private var primaryOverlayDetail: String {
         if capture.captureBlockerStatus != "Clear" {
             return capture.captureBlockerDetail
+        }
+        if capture.isRecording, ["room_walkthrough", "full_room_semantic"].contains(capture.captureIntent),
+           capture.trackingStatus == "normal",
+           !["Hold", "Not ready"].contains(capture.readinessState), capture.roomSurfaceAction != nil {
+            return capture.roomSurfaceDetail
         }
         return scanMode == .roomWalk ? capture.colmapCoachDetail : capture.coverageDisplayNavigationText
     }

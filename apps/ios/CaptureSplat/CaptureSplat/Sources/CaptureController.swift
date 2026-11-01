@@ -425,6 +425,9 @@ final class CaptureController: NSObject, ObservableObject {
     private var lastLiveGuidanceTimestamp: TimeInterval = -.infinity
     private var accumulatedIMURows = 0
     private var lastIMUUIUpdateTimestamp: TimeInterval = -.infinity
+    private var roomSurfaceCoverage = RoomSurfaceCoverage()
+    @Published private(set) var roomSurfaceAction: String?
+    @Published private(set) var roomSurfaceDetail = ""
     private var coverageSectorCounts = Array(repeating: 0, count: 12)
     private var targetElevationBandCounts = Array(repeating: 0, count: 3)
     private var targetDistanceBandCounts = Array(repeating: 0, count: 3)
@@ -892,6 +895,9 @@ final class CaptureController: NSObject, ObservableObject {
             droppedFrames = 0
             validDepthRatio = 0
             guidancePoints.removeAll()
+            roomSurfaceCoverage = RoomSurfaceCoverage()
+            roomSurfaceAction = nil
+            roomSurfaceDetail = ""
             coverageSectorCounts = Array(repeating: 0, count: coverageSectorCounts.count)
             coverageSectors = Array(repeating: 0.0, count: coverageSectors.count)
             targetElevationBandCounts = Array(repeating: 0, count: targetElevationBandCounts.count)
@@ -4554,6 +4560,42 @@ final class CaptureController: NSObject, ObservableObject {
         ]
     }
 
+    private func acceptedSurfacePoints(depthMap: CVPixelBuffer, confidenceMap: CVPixelBuffer?,
+                                       transform: simd_float4x4, intrinsics: CameraIntrinsics) -> [SIMD3<Float>] {
+        guard let confidenceMap, intrinsics.w > 0, intrinsics.h > 0,
+              intrinsics.flX > 0, intrinsics.flY > 0 else { return [] }
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
+        defer {
+            CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly)
+            CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
+        }
+        let width = CVPixelBufferGetWidth(depthMap), height = CVPixelBufferGetHeight(depthMap)
+        guard width > 0, height > 0,
+              CVPixelBufferGetWidth(confidenceMap) == width, CVPixelBufferGetHeight(confidenceMap) == height,
+              let depth = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self),
+              let confidence = CVPixelBufferGetBaseAddress(confidenceMap)?.assumingMemoryBound(to: UInt8.self)
+        else { return [] }
+        let depthStride = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.size
+        let confidenceStride = CVPixelBufferGetBytesPerRow(confidenceMap)
+        let sx = Float(width) / Float(intrinsics.w), sy = Float(height) / Float(intrinsics.h)
+        var points: [SIMD3<Float>] = []
+        points.reserveCapacity(48)
+        for row in 0..<6 {
+            for column in 0..<8 {
+                let x = min(width - 1, (2 * column + 1) * width / 16)
+                let y = min(height - 1, (2 * row + 1) * height / 12)
+                let z = depth[y * depthStride + x]
+                guard confidence[y * confidenceStride + x] == 2, z.isFinite, z >= 0.15, z <= 6 else { continue }
+                let opticalX = (Float(x) - intrinsics.cx * sx) * z / (intrinsics.flX * sx)
+                let opticalY = (Float(y) - intrinsics.cy * sy) * z / (intrinsics.flY * sy)
+                let world = transform * SIMD4<Float>(opticalX, -opticalY, -z, 1)
+                points.append(SIMD3<Float>(world.x, world.y, world.z))
+            }
+        }
+        return points
+    }
+
     private func sampleGuidancePoints(from pixelBuffer: CVPixelBuffer) -> [ScanGuidancePoint] {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
@@ -5236,6 +5278,7 @@ extension CaptureController: ARSessionDelegate {
         let depthBuffer = sceneDepth.depthMap
         let confidenceBuffer = isConfidenceEnabled ? sceneDepth.confidenceMap : nil
         let transform = frame.camera.transform
+        let surfacePoints = acceptedSurfacePoints(depthMap: depthBuffer, confidenceMap: confidenceBuffer, transform: transform, intrinsics: intrinsics)
         let trackingState = trackingStateText(frame.camera.trackingState)
         let timestamp = frame.timestamp
         let imageResolution = frame.camera.imageResolution
@@ -5332,6 +5375,10 @@ extension CaptureController: ARSessionDelegate {
                 self.lastAcceptedSectorIndex = keyframeDecision.sectorIndex
                 let acceptedPosition = self.cameraPosition(transform)
                 self.recordAcceptedRoomPath(position: acceptedPosition)
+                self.roomSurfaceCoverage.observe(camera: acceptedPosition,
+                    forwardY: self.cameraForward(transform).y, points: surfacePoints)
+                self.roomSurfaceAction = self.roomSurfaceCoverage.nextAction
+                self.roomSurfaceDetail = self.roomSurfaceCoverage.detail
                 self.lastAcceptedCameraPosition = acceptedPosition
                 self.lastAcceptedExposureMean = keyframeDecision.exposureMean
                 self.recordAcceptedCoverage(
