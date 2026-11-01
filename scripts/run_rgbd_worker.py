@@ -95,6 +95,8 @@ def finalize(capture,out,steps):
              'viewer_camera':{'convention':'opengl','position':[pose[i][3] for i in range(3)],
                               'rotation':[row[:3] for row in pose[:3]],'gravity_up':[0,1,0]},
              'viewer_profile':'classic-depth-v1','training_resolution_factor':ledger.get('data_factor',2),
+             'model_coordinate_frame':'arkit_world','model_units':'meters',
+             'source_capture_sha256':report['source_manifest_sha256'],
              'decision':'hold','quality_verified':False,'sensor_supervision_applied':True}
     write_json_strict(out/'result.json',receipt)
     return receipt

@@ -34,6 +34,12 @@ struct ARCaptureView: UIViewRepresentable {
         private var captureVideoFormat: ARConfiguration.VideoFormat?
 
         func update(view: ARView, capture: CaptureController) {
+            // RoomPlan owns the shared AR configuration while scanning and
+            // finalizing. A SwiftUI refresh must not replace its configuration.
+            if capture.isRoomSemanticsActive {
+                renderer.update(view: view, capture: capture)
+                return
+            }
             let policy = capture.runtimePolicy
             let usesCaptureVideoFormat = capture.isStarting || capture.isRecording || capture.isFinalizing
             if lastUsesCaptureSensors != policy.usesCaptureSensors
@@ -89,6 +95,7 @@ struct ARCaptureView: UIViewRepresentable {
                 lastUsesDepth = policy.usesDepth
                 lastUsesCaptureVideoFormat = usesCaptureVideoFormat
             }
+            capture.startRoomSemanticsIfReady()
             renderer.update(view: view, capture: capture)
         }
 

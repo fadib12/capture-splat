@@ -150,7 +150,20 @@ struct ContentView: View {
             if !finalizing, capture.capturePackageState == .ready {
                 refreshCaptureLibrary()
                 reviewCaptureID = capture.currentSessionDirectory?.path
-                activeSheet = .review
+                if pcReconstruction.configured, !pcReconstruction.busy,
+                   let directory = capture.currentSessionDirectory {
+                    activeSheet = .pcReconstruction
+                    Task { await pcReconstruction.reconstruct(directory: directory) }
+                } else {
+                    activeSheet = .review
+                }
+            }
+        }
+        .onChange(of: pcReconstruction.completedModel) { _, model in
+            guard let model else { return }
+            trainedSplatURL = model
+            if scenePhase == .active, !capture.isRecording, !capture.isFinalizing {
+                openSplatViewer()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -277,7 +290,7 @@ struct ContentView: View {
                     }
                     Button("Camera settings", systemImage: "camera.aperture") { activeSheet = .camera }
                     Button("World Studio pairing", systemImage: "antenna.radiowaves.left.and.right") { activeSheet = .livePairing }
-                    Text("Version 0.1.8 (11)")
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"))")
                 } label: {
                     Image(systemName: "ellipsis").frame(width: 44, height: 44)
                         .background(.ultraThinMaterial, in: Circle())
@@ -394,6 +407,13 @@ struct ContentView: View {
                 Text(capture.cameraLensLabel)
                     .font(.caption.weight(.semibold))
                     .padding(10).background(.ultraThinMaterial, in: Capsule())
+            }
+            if capture.isRecording, capture.isRoomSemanticsActive {
+                Label("\(capture.recognizedRoomWalls) walls / \(capture.recognizedRoomObjects) objects",
+                      systemImage: "square.stack.3d.up")
+                    .font(.caption.weight(.semibold))
+                    .padding(8).background(.ultraThinMaterial, in: Capsule())
+                    .accessibilityLabel("Room recognition: \(capture.recognizedRoomWalls) walls and \(capture.recognizedRoomObjects) objects detected")
             }
             compactRecordButton
             Text(capture.isRecording ? "Finish" : recordButtonTitle)

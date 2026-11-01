@@ -10,6 +10,10 @@ const keys = new Set();
 const heightPointers = new Map();
 const stick = new THREE.Vector2();
 let renderer, spark, mesh, camera, scene, pointer, orbit;
+const semanticGroup = new THREE.Group();
+const semanticItems = [];
+let layoutVisible = false;
+let selectedEntity = null;
 let loaded = false;
 let disposed = false;
 let mode = "walk";
@@ -285,6 +289,108 @@ function estimateSceneScale(bytes, format) {
   return count;
 }
 
+function setLayoutVisible(visible) {
+  layoutVisible = visible;
+  semanticGroup.visible = visible;
+  $("layout-panel").hidden = !visible;
+  $("layout").setAttribute("aria-pressed", String(visible));
+  requestRender();
+}
+
+function selectSemantic(item) {
+  selectedEntity = item.entity.id;
+  for (const candidate of semanticItems) {
+    candidate.wire.material.color.set(candidate === item ? 0x43d8ff : 0xc3e3ef);
+    candidate.wire.material.opacity = candidate === item ? 1 : .24;
+    candidate.button.setAttribute("aria-pressed", String(candidate === item));
+  }
+  const label = item.entity.label.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ");
+  $("layout-selection").textContent = `${label}: estimated ${item.entity.dimensions.map(v => v.toFixed(2)).join(" x ")} m / ${item.entity.confidence} confidence`;
+  requestRender();
+}
+
+async function loadSemantics() {
+  if (!window.CAPTURE_SPLAT_SEMANTICS) return;
+  try {
+    const response = await fetch(new URL("semantics.json", window.location.href));
+    if (!response.ok) throw new Error("Layout unavailable");
+    const reader = response.body.getReader();
+    const chunks = []; let bytes = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 2 * 1024 * 1024) { await reader.cancel(); throw new Error("Layout exceeds limits"); }
+      chunks.push(value);
+    }
+    const data = new Uint8Array(bytes); let offset = 0;
+    for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength; }
+    const layout = JSON.parse(new TextDecoder().decode(data));
+    if (layout.schema !== "capture_splat.viewer_semantics.v1" || layout.coordinate_frame !== "arkit_world" ||
+        layout.units !== "meters" || !Array.isArray(layout.entities) || layout.entities.length > 512)
+      throw new Error("Unsupported layout");
+    const identifiers = new Set();
+    for (const entity of layout.entities) {
+      if (typeof entity.id !== "string" || entity.id.length > 96 || identifiers.has(entity.id) ||
+          typeof entity.label !== "string" || !entity.label.length || entity.label.length > 80 ||
+          !["wall", "floor", "door", "window", "opening", "object"].includes(entity.kind) ||
+          !["high", "medium", "low", "unknown"].includes(entity.confidence) ||
+          !Array.isArray(entity.dimensions) || entity.dimensions.length !== 3 ||
+          !entity.dimensions.every(v => Number.isFinite(v) && v >= 0 && v <= 100) ||
+          !Array.isArray(entity.transform) || entity.transform.length !== 4 ||
+          !entity.transform.every(row => Array.isArray(row) && row.length === 4 && row.every(Number.isFinite)))
+        throw new Error("Invalid layout entity");
+      identifiers.add(entity.id);
+      const matrix = new THREE.Matrix4().set(...entity.transform.flat());
+      if (Math.abs(matrix.determinant() - 1) > .001 ||
+          entity.transform[3].some((v, i) => Math.abs(v - (i === 3 ? 1 : 0)) > .00001))
+        throw new Error("Invalid layout frame");
+    }
+    scene.add(semanticGroup);
+    semanticGroup.visible = false;
+    const counts = new Map();
+    for (const entity of layout.entities) {
+      const geometry = new THREE.BoxGeometry(...entity.dimensions.map(v => Math.max(.025, v)));
+      const proxy = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      proxy.matrixAutoUpdate = false;
+      proxy.matrix.set(...entity.transform.flat());
+      const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({ color: 0xc3e3ef, transparent: true, opacity: .24, depthTest: false, depthWrite: false }));
+      proxy.add(wire); semanticGroup.add(proxy);
+      const button = document.createElement("button");
+      const label = entity.label.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ");
+      const number = (counts.get(label) || 0) + 1; counts.set(label, number);
+      button.textContent = `${label.charAt(0).toUpperCase() + label.slice(1)} ${number}`;
+      button.type = "button"; button.setAttribute("aria-pressed", "false");
+      const item = { entity, proxy, wire, button };
+      button.addEventListener("click", () => selectSemantic(item));
+      $("layout-items").appendChild(button); semanticItems.push(item);
+    }
+    if (semanticItems.length) $("layout").hidden = false;
+    $("layout").addEventListener("click", () => setLayoutVisible(!layoutVisible));
+    let press = null;
+    canvas.addEventListener("pointerdown", event => {
+      press = event.isPrimary ? { x: event.clientX, y: event.clientY, time: performance.now() } : null;
+    });
+    canvas.addEventListener("pointercancel", () => { press = null; });
+    canvas.addEventListener("pointerup", event => {
+      if (!layoutVisible || !press || performance.now() - press.time > 450 ||
+          Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8) { press = null; return; }
+      press = null;
+      const bounds = canvas.getBoundingClientRect();
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2((event.clientX - bounds.left) / bounds.width * 2 - 1,
+        -(event.clientY - bounds.top) / bounds.height * 2 + 1), camera);
+      const hit = ray.intersectObjects(semanticItems.map(item => item.proxy), false)[0];
+      const item = hit && semanticItems.find(candidate => candidate.proxy === hit.object);
+      if (item) selectSemantic(item);
+    });
+    requestRender();
+  } catch (error) {
+    showHint("Room loaded. Layout labels could not be opened.");
+  }
+}
+
 function dispose() {
   if (disposed) return;
   disposed = true;
@@ -292,6 +398,11 @@ function dispose() {
   clearTimeout(hintTimer);
   renderer?.setAnimationLoop(null);
   orbit?.dispose();
+  semanticGroup.traverse(object => {
+    object.geometry?.dispose();
+    if (object.material) object.material.dispose();
+  });
+  semanticItems.length = 0;
   mesh?.dispose();
   spark?.dispose();
   renderer?.dispose();
@@ -356,8 +467,10 @@ async function openRoom() {
       getState: () => ({ ready: loaded, mode, quality, count, format, maxSh: mesh.maxSh,
         position: camera.position.toArray(), quaternion: camera.quaternion.toArray(), up: camera.up.toArray(),
         renderSize: renderer.getDrawingBufferSize(new THREE.Vector2()).toArray(),
-        homePosition: homePosition.toArray(), homeQuaternion: homeQuaternion.toArray() })
+        homePosition: homePosition.toArray(), homeQuaternion: homeQuaternion.toArray(),
+        semanticCount: semanticItems.length, layoutVisible, selectedEntity })
     }) });
+    void loadSemantics();
     // Available only in an explicitly instrumented local parity page. Native
     // product pages never enable this calibration/test interface.
     if (window.CAPTURE_SPLAT_DIAGNOSTICS === true) {

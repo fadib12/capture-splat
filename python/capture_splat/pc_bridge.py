@@ -225,7 +225,8 @@ class BridgeStore:
             source.rename(archive)
         attempts[self.pipeline_revision] = revision_attempt + 1
         for name in ['result_sha256', 'result_bytes', 'result_format', 'result_path',
-                     'viewer_camera', 'covariance_export_report_sha256', 'source_ply_sha256']:
+                     'viewer_camera', 'covariance_export_report_sha256', 'source_ply_sha256',
+                     'model_coordinate_frame', 'model_units', 'source_capture_sha256']:
             state.pop(name, None)
         state.update(status='uploading', attempt=attempt + 1,
                      pipeline_revision=self.pipeline_revision, profile=self.profile,

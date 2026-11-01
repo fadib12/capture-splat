@@ -256,7 +256,7 @@ final class CaptureController: NSObject, ObservableObject {
     private var observedRecordingVideoResolution: Resolution?
     private var cameraFormatTransitionFrameCount = 0
     @Published var recordedVideoFrames = 0
-    @Published var captureIntent = "room_walkthrough"
+    @Published var captureIntent = "full_room_semantic"
     @Published var hapticAcceptedCount = 0
     @Published var currentCoverageSector = 0
     @Published var targetCoverageSector = 0
@@ -283,6 +283,8 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var pointCloudPreviewFile: URL?
     @Published var roomPlanStatus = "Room plan waiting"
     @Published var roomPlanDetail = "Use Room Plan to inspect walls and layout before Mac validation."
+    @Published private(set) var recognizedRoomWalls = 0
+    @Published private(set) var recognizedRoomObjects = 0
     @Published var roomPlanSummaryText = "No RoomPlan export"
     @Published var roomPlanFile: URL?
     @Published var roomPlanReportFile: URL?
@@ -375,7 +377,7 @@ final class CaptureController: NSObject, ObservableObject {
             title: "RoomPlan + 3DGS",
             shortTitle: "Semantic",
             detail: "For VR room review. Capture appearance with Video 3DGS and export RoomPlan for walls, doors, windows, and furniture proposals.",
-            guidance: "Capture the room, then run RoomPlan so layout semantics travel with the 3DGS evidence.",
+            guidance: "Move slowly around the room. Walls and furniture are captured together with the images.",
             systemImage: "map",
             requiresSubjectLock: false
         ),
@@ -542,6 +544,11 @@ final class CaptureController: NSObject, ObservableObject {
     private let maxSpatialGuidanceDurationSamples = 600
     private let spatialGuidanceUpdateBudgetMs = 12.0
     private var sharedRoomCaptureSession: RoomCaptureSession?
+    private var didAttemptSharedRoomPlan = false
+    private var sharedRoomPlanStartedAt: TimeInterval = 0
+    private var finalizingVideoResult: CaptureVideoRecorder.FinishResult?
+    var isRoomSemanticsActive: Bool { sharedRoomCaptureSession != nil }
+    private var requestsRoomSemantics: Bool { ["room_walkthrough", "full_room_semantic"].contains(captureIntent) }
     private var sharedRoomPlanGeneration: UUID?
     private var sharedRoomPlanDirectory: URL?
     private var sharedRoomPlanStopCompletion: (() -> Void)?
@@ -598,7 +605,7 @@ final class CaptureController: NSObject, ObservableObject {
         let supportsMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
         let supportsDepth = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
         let supportsPlanes = session != nil
-        if captureIntent == "full_room_semantic", RoomCaptureSession.isSupported, sharedRoomCaptureSession != nil {
+        if requestsRoomSemantics, RoomCaptureSession.isSupported, sharedRoomCaptureSession != nil {
             spatialGuidanceMode = "roomplan_shared"
             spatialGuidanceStatus = "Room semantics"
         } else if supportsMesh {
@@ -859,6 +866,10 @@ final class CaptureController: NSObject, ObservableObject {
                 "timestamp", "latitude", "longitude", "altitude", "horizontal_accuracy", "vertical_accuracy",
                 "course", "speed",
             ])
+            recognizedRoomWalls = 0
+            recognizedRoomObjects = 0
+            didAttemptSharedRoomPlan = false
+            finalizingVideoResult = nil
             frames.removeAll()
             personMaskRecords.removeAll()
             personMaskScheduledCount = 0
@@ -1031,7 +1042,7 @@ final class CaptureController: NSObject, ObservableObject {
                 location.requestWhenInUseAuthorization()
                 location.startUpdatingLocation()
             }
-            startSharedRoomPlanIfNeeded(in: directory)
+            // The camera coordinator starts semantics after applying capture configuration.
         } catch {
             capturePackageState = currentSessionDirectory == nil ? .idle : .partial
             statusText = "Start failed: \(error.localizedDescription)"
@@ -1056,22 +1067,30 @@ final class CaptureController: NSObject, ObservableObject {
         location.stopUpdatingLocation()
         applyCaptureLocks(false)
         let meshSnapshot = recordedMeshAnchorIDs.compactMap { meshAnchors[$0] }
-        stopSharedRoomPlanIfNeeded { [weak self] in
-            guard let self else { return }
-            self.videoRecorder.finish { [weak self] videoResult in
+        let finishGroup = DispatchGroup()
+        finishGroup.enter()
+        finishGroup.enter()
+        stopSharedRoomPlanIfNeeded { finishGroup.leave() }
+        videoRecorder.finish { [weak self] videoResult in
+            DispatchQueue.main.async {
+                self?.finalizingVideoResult = videoResult
+                finishGroup.leave()
+            }
+        }
+        finishGroup.notify(queue: .main) { [weak self] in
+            guard let self, let videoResult = self.finalizingVideoResult else { return }
+            self.finalizingVideoResult = nil
+            self.writeQueue.async { [weak self] in
                 guard let self else { return }
-                self.writeQueue.async { [weak self] in
-                    guard let self else { return }
-                    self.closeCSVHandles()
-                    let previewStatus = self.finalizePointCloudPreview()
-                    let meshResult = self.writeARKitMesh(anchors: meshSnapshot)
-                    self.maskWriteQueue.async { [weak self] in
-                        DispatchQueue.main.async {
-                            guard let self else { return }
-                            self.pointCloudPreviewPointCount = previewStatus.count
-                            self.pointCloudPreviewFile = previewStatus.url
-                            self.completeCaptureFinalization(videoResult: videoResult, meshResult: meshResult)
-                        }
+                self.closeCSVHandles()
+                let previewStatus = self.finalizePointCloudPreview()
+                let meshResult = self.writeARKitMesh(anchors: meshSnapshot)
+                self.maskWriteQueue.async { [weak self] in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.pointCloudPreviewPointCount = previewStatus.count
+                        self.pointCloudPreviewFile = previewStatus.url
+                        self.completeCaptureFinalization(videoResult: videoResult, meshResult: meshResult)
                     }
                 }
             }
@@ -1762,6 +1781,8 @@ final class CaptureController: NSObject, ObservableObject {
 
     @available(iOS 16.0, *)
     func updateRoomPlanPreview(room: CapturedRoom) {
+        recognizedRoomWalls = room.walls.count
+        recognizedRoomObjects = room.objects.count
         let summary = roomPlanSummary(room)
         roomPlanStatus = summary.status
         roomPlanDetail = summary.detail
@@ -1780,8 +1801,15 @@ final class CaptureController: NSObject, ObservableObject {
         roomPlanDetail = message
     }
 
+    func startRoomSemanticsIfReady() {
+        guard isRecording, !didAttemptSharedRoomPlan, requestsRoomSemantics,
+              let directory = currentSessionDirectory else { return }
+        didAttemptSharedRoomPlan = true
+        startSharedRoomPlanIfNeeded(in: directory)
+    }
+
     private func startSharedRoomPlanIfNeeded(in directory: URL) {
-        guard captureIntent == "full_room_semantic" else {
+        guard requestsRoomSemantics else {
             refreshSpatialGuidanceCapability()
             return
         }
@@ -1805,6 +1833,7 @@ final class CaptureController: NSObject, ObservableObject {
         spatialGuidanceMode = "roomplan_shared"
         spatialGuidanceStatus = "Room semantics"
         applySpatialGuidanceThermalPolicy(ProcessInfo.processInfo.thermalState)
+        sharedRoomPlanStartedAt = ProcessInfo.processInfo.systemUptime
         roomSession.run(configuration: configuration)
         appendSessionEvent("room_plan_shared_started", details: ["generation": generation.uuidString])
     }
@@ -1861,7 +1890,7 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     @available(iOS 16.0, *)
-    private func writeRoomPlanAssets(room: CapturedRoom, directory: URL) throws {
+    private func writeRoomPlanAssets(room: CapturedRoom, directory: URL, sharedSession: Bool = false) throws {
         let roomPlanDirectory = directory.appendingPathComponent("room_plan", isDirectory: true)
         try FileManager.default.createDirectory(at: roomPlanDirectory, withIntermediateDirectories: true)
         let usdzURL = roomPlanDirectory.appendingPathComponent("room.usdz")
@@ -1869,7 +1898,7 @@ final class CaptureController: NSObject, ObservableObject {
         let semanticsURL = roomPlanDirectory.appendingPathComponent("room_semantics.json")
         try room.export(to: usdzURL, exportOptions: .mesh)
         writeJSON(roomPlanReport(room: room), to: reportURL)
-        writeJSON(roomPlanSemanticsReport(room: room), to: semanticsURL)
+        writeJSON(roomPlanSemanticsReport(room: room, sharedSession: sharedSession), to: semanticsURL)
         roomPlanFile = usdzURL
         roomPlanReportFile = reportURL
         roomPlanSemanticsFile = semanticsURL
@@ -1929,71 +1958,54 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     @available(iOS 16.0, *)
-    private func roomPlanSemanticsReport(room: CapturedRoom) -> [String: Any] {
-        [
+    private func roomPlanSemanticsReport(room: CapturedRoom, sharedSession: Bool) -> [String: Any] {
+        var report: [String: Any] = [
             "schema": "capture_splat.room_semantics.v0.1",
             "room_plan_file": "room_plan/room.usdz",
             "semantic_source": "Apple RoomPlan CapturedRoom",
-            "walls": room.walls.enumerated().map {
-                roomSurfaceSemantic(kind: "wall", index: $0.offset, dimensions: $0.element.dimensions, transform: $0.element.transform)
-            },
-            "doors": room.doors.enumerated().map {
-                roomSurfaceSemantic(kind: "door", index: $0.offset, dimensions: $0.element.dimensions, transform: $0.element.transform)
-            },
-            "windows": room.windows.enumerated().map {
-                roomSurfaceSemantic(kind: "window", index: $0.offset, dimensions: $0.element.dimensions, transform: $0.element.transform)
-            },
-            "openings": room.openings.enumerated().map {
-                roomSurfaceSemantic(kind: "opening", index: $0.offset, dimensions: $0.element.dimensions, transform: $0.element.transform)
-            },
-            "objects": room.objects.enumerated().map {
-                roomObjectSemantic(index: $0.offset, object: $0.element)
-            },
-            "authority": [
-                "capture_guidance_only": true,
-                "room_semantic_proposal": true,
-                "metric_authority": false,
-                "collision_geometry": false,
-                "planning_authority": false,
-                "semantic_authority": false,
-                "quality_proof": false,
-            ],
+            "source_room_id": room.identifier.uuidString,
+            "coordinate_frame": sharedSession ? "arkit_world" : "roomplan_local",
+            "units": "meters",
+            "frame_binding": sharedSession ? "shared_ar_session_no_reset" : "separate_roomplan_session",
+            "walls": room.walls.enumerated().map { roomSurfaceSemantic(kind: "wall", index: $0.offset, surface: $0.element) },
+            "doors": room.doors.enumerated().map { roomSurfaceSemantic(kind: "door", index: $0.offset, surface: $0.element) },
+            "windows": room.windows.enumerated().map { roomSurfaceSemantic(kind: "window", index: $0.offset, surface: $0.element) },
+            "openings": room.openings.enumerated().map { roomSurfaceSemantic(kind: "opening", index: $0.offset, surface: $0.element) },
+            "objects": room.objects.enumerated().map { roomObjectSemantic(index: $0.offset, object: $0.element) },
+            "authority": ["capture_guidance_only": true, "room_semantic_proposal": true,
+                          "metric_authority": false, "collision_geometry": false,
+                          "planning_authority": false, "semantic_authority": false, "quality_proof": false],
         ]
+        if #available(iOS 17.0, *) {
+            report["floors"] = room.floors.enumerated().map { roomSurfaceSemantic(kind: "floor", index: $0.offset, surface: $0.element) }
+        }
+        return report
     }
 
-    private func roomSurfaceSemantic(
-        kind: String,
-        index: Int,
-        dimensions: SIMD3<Float>,
-        transform: simd_float4x4
-    ) -> [String: Any] {
-        [
-            "id": "\(kind)_\(index)",
-            "kind": kind,
-            "dimensions_meters": vectorReport(dimensions),
-            "transform_matrix": transform.rows,
-            "center_meters": vectorReport(SIMD3<Float>(
-                transform.columns.3.x,
-                transform.columns.3.y,
-                transform.columns.3.z
-            )),
-        ]
+    @available(iOS 16.0, *)
+    private func roomSurfaceSemantic(kind: String, index: Int, surface: CapturedRoom.Surface) -> [String: Any] {
+        ["id": "\(kind)_\(index)", "source_id": surface.identifier.uuidString,
+         "kind": kind, "confidence": String(describing: surface.confidence),
+         "dimensions_meters": vectorReport(surface.dimensions), "transform_matrix": surface.transform.rows,
+         "center_meters": vectorReport(SIMD3<Float>(surface.transform.columns.3.x,
+                                                   surface.transform.columns.3.y, surface.transform.columns.3.z))]
     }
 
     @available(iOS 16.0, *)
     private func roomObjectSemantic(index: Int, object: CapturedRoom.Object) -> [String: Any] {
-        [
-            "id": "object_\(index)",
-            "kind": "object",
-            "category": String(describing: object.category),
-            "dimensions_meters": vectorReport(object.dimensions),
-            "transform_matrix": object.transform.rows,
-            "center_meters": vectorReport(SIMD3<Float>(
-                object.transform.columns.3.x,
-                object.transform.columns.3.y,
-                object.transform.columns.3.z
-            )),
+        var record: [String: Any] = [
+            "id": "object_\(index)", "source_id": object.identifier.uuidString, "kind": "object",
+            "category": String(describing: object.category), "confidence": String(describing: object.confidence),
+            "dimensions_meters": vectorReport(object.dimensions), "transform_matrix": object.transform.rows,
+            "center_meters": vectorReport(SIMD3<Float>(object.transform.columns.3.x,
+                                                       object.transform.columns.3.y, object.transform.columns.3.z)),
         ]
+        if #available(iOS 17.0, *) {
+            record["attributes"] = object.attributes.map {
+                ["type": String(describing: type(of: $0)), "value": String(describing: $0)]
+            }
+        }
+        return record
     }
 
     private func vectorReport(_ vector: SIMD3<Float>) -> [String: Float] {
@@ -5053,7 +5065,7 @@ extension CaptureController: RoomCaptureSessionDelegate {
                     let builder = RoomBuilder(options: [.beautifyObjects])
                     let room = try await builder.capturedRoom(from: data)
                     guard self.sharedRoomPlanGeneration == generation else { return }
-                    try self.writeRoomPlanAssets(room: room, directory: directory)
+                    try self.writeRoomPlanAssets(room: room, directory: directory, sharedSession: true)
                     let summary = self.roomPlanSummary(room)
                     self.roomPlanStatus = "RoomPlan exported"
                     self.roomPlanDetail = summary.detail
@@ -5167,6 +5179,17 @@ extension CaptureController: ARSessionDelegate {
             // The Record action and SwiftUI session reconfiguration can occur on
             // adjacent run-loop turns. Do not let an old preview frame initialize
             // the fixed-size video writer, or mix dimensions later in the scan.
+            if isRoomSemanticsActive, observedRecordingVideoResolution == nil {
+                guard frame.timestamp >= sharedRoomPlanStartedAt + 0.35,
+                      let format = session.configuration?.videoFormat,
+                      Int(format.imageResolution.width) == width,
+                      Int(format.imageResolution.height) == height else {
+                    statusText = "Preparing room capture"
+                    return
+                }
+                selectCaptureCamera(format, forCapture: true,
+                    fourKSupported: max(width, height) >= 3840 && min(width, height) >= 2160)
+            }
             guard selectedVideoFormatIsForCapture,
                   width == selectedVideoResolution.w,
                   height == selectedVideoResolution.h else {

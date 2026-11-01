@@ -184,6 +184,11 @@ class FullCaptureStore(BridgeStore):
                 raise ValueError('Consumed alignment binding changed.')
             if report.get('data_factor') not in (1,2) or report.get('viewer_profile')!='classic-depth-v1':
                 raise ValueError('Unsupported calibrated training profile.')
+        if receipt.get('model_coordinate_frame') is not None:
+            if (receipt.get('model_coordinate_frame')!='arkit_world' or receipt.get('model_units')!='meters'
+                or report.get('world_normalization_applied') is not False
+                or receipt.get('source_capture_sha256')!=report['source_manifest_sha256']):
+                raise ValueError('Model-to-capture frame binding mismatch.')
         return model,'ply',report_digest
 
 
@@ -198,6 +203,9 @@ class FullCaptureStore(BridgeStore):
                          viewer_profile=receipt.get('viewer_profile','classic-depth-v1'),
                          training_resolution_factor=receipt.get('training_resolution_factor',2),
                          training_consumption_sha256=report_digest,viewer_camera=receipt['viewer_camera'])
+            if receipt.get('model_coordinate_frame')=='arkit_world':
+                state.update(model_coordinate_frame='arkit_world',model_units='meters',
+                             source_capture_sha256=receipt['source_capture_sha256'])
             self.save(identifier,state)
         except Exception as exc:
             state=self.state(identifier)
@@ -210,6 +218,9 @@ class FullCaptureStore(BridgeStore):
         receipt={'pipeline_revision':REVISION,'profile':'rgbd','result_format':'ply',
                  'sha256':state['result_sha256'],'bytes':state['result_bytes'],
                  'training_consumption_sha256':state['training_consumption_sha256']}
+        if state.get('model_coordinate_frame') is not None:
+            receipt.update(model_coordinate_frame=state['model_coordinate_frame'],model_units=state.get('model_units'),
+                           source_capture_sha256=state.get('source_capture_sha256'))
         return self._verified_result(identifier,receipt)[0]
 
 

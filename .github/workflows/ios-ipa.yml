@@ -31,7 +31,7 @@ jobs:
           source = Path('apps/ios/CaptureSplat/CaptureSplat/Sources/SplatViewer.swift').read_text()
           start = source.index('enum SplatLibrary {')
           end = source.index('\nstruct SplatFilePicker:', start)
-          Path(os.environ['RUNNER_TEMP'], 'SplatLibrary.swift').write_text('import Foundation\n' + source[start:end])
+          Path(os.environ['RUNNER_TEMP'], 'SplatLibrary.swift').write_text('import Foundation\nimport CryptoKit\n' + source[start:end])
           PY
           xcrun swiftc "$RUNNER_TEMP/SplatLibrary.swift" tests/swift/SplatImportProbe.swift -o "$RUNNER_TEMP/splat-import-probe"
           "$RUNNER_TEMP/splat-import-probe"
@@ -81,8 +81,8 @@ jobs:
           test -f "$APP_PATH/SplatViewer/LICENSE"
           test -f "$APP_PATH/SplatViewer/THREE-LICENSE"
           /usr/libexec/PlistBuddy -c "Add :CaptureSplatBuildCommit string $GITHUB_SHA" "$APP_PATH/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.1.9"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "12"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.2.0"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "13"
           mkdir -p "$RUNNER_TEMP/package/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
           cd "$RUNNER_TEMP/package"

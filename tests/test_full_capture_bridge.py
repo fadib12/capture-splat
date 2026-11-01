@@ -154,3 +154,26 @@ def test_partial_old_revision_upload_still_resumes_without_mutation(tmp_path):
     from capture_splat.full_capture_bridge import REVISION
     assert state['pipeline_revision']==REVISION and state['attempt']==2
     assert len(state['uploaded'])==len(data['files'])
+
+
+def test_model_frame_binding_rejects_mismatched_capture_or_normalized_world(tmp_path):
+    from capture_splat.full_capture_bridge import REVISION
+    root,data,body=package(tmp_path)
+    store=FullCaptureStore(tmp_path/'scans',lambda _:None);state=store.create(body)
+    folder=store.folder(state['id']);result=folder/'result';(result/'inference').mkdir(parents=True)
+    model=b'synthetic model bytes for receipt validation'
+    (result/'inference/gaussians.ply').write_bytes(model)
+    capture_sha=hashlib.sha256((folder/'capture/capture.json').read_bytes()).hexdigest()
+    report={'ply_sha256':hashlib.sha256(model).hexdigest(),'depth_loss_steps':1,'depth_samples_consumed':1,
+            'depth_loss_differentiable':True,'video_training_images':['000001.jpg'],
+            'source_manifest_sha256':capture_sha,'world_normalization_applied':False}
+    report_path=result/'training-consumption.json';report_path.write_text(json.dumps(report))
+    receipt={'pipeline_revision':REVISION,'profile':'rgbd','result_format':'ply','sha256':report['ply_sha256'],
+             'bytes':len(model),'training_consumption_sha256':hashlib.sha256(report_path.read_bytes()).hexdigest(),
+             'model_coordinate_frame':'arkit_world','model_units':'meters','source_capture_sha256':capture_sha}
+    assert store._verified_result(state['id'],receipt)[0]==model
+    receipt['source_capture_sha256']='0'*64
+    with pytest.raises(ValueError,match='frame binding'):store._verified_result(state['id'],receipt)
+    receipt['source_capture_sha256']=capture_sha;report['world_normalization_applied']=True
+    report_path.write_text(json.dumps(report));receipt['training_consumption_sha256']=hashlib.sha256(report_path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError,match='frame binding'):store._verified_result(state['id'],receipt)

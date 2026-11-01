@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftUI
 import UIKit
@@ -41,6 +42,109 @@ enum SplatLibrary {
         try data.write(to: target, options: .atomic)
         UserDefaults.standard.set(name, forKey: "latestTrainedSplat")
         return target
+    }
+
+    struct SemanticEntity: Codable {
+        let id: String
+        let kind: String
+        let label: String
+        let confidence: String
+        let dimensions: [Double]
+        let transform: [[Double]]
+    }
+    struct SemanticAttachment: Codable {
+        let schema: String
+        let model_sha256: String
+        let source_sha256: String
+        let source_capture_sha256: String
+        let coordinate_frame: String
+        let units: String
+        let entities: [SemanticEntity]
+    }
+    private struct SemanticVector: Decodable { let x: Double; let y: Double; let z: Double }
+    private struct SemanticAttribute: Decodable { let type: String; let value: String }
+    private struct SemanticSourceEntity: Decodable {
+        let id: String
+        let source_id: String?
+        let kind: String
+        let category: String?
+        let confidence: String?
+        let dimensions_meters: SemanticVector
+        let transform_matrix: [[Double]]
+        let attributes: [SemanticAttribute]?
+    }
+    private struct SemanticSource: Decodable {
+        let schema: String
+        let coordinate_frame: String
+        let frame_binding: String
+        let units: String
+        let walls: [SemanticSourceEntity]?
+        let floors: [SemanticSourceEntity]?
+        let doors: [SemanticSourceEntity]?
+        let windows: [SemanticSourceEntity]?
+        let openings: [SemanticSourceEntity]?
+        let objects: [SemanticSourceEntity]?
+    }
+    private static func validSemanticEntity(_ entity: SemanticEntity) -> Bool {
+        guard entity.id.count <= 96, !entity.id.isEmpty,
+              entity.id.range(of: "^[a-zA-Z0-9_-]+$", options: .regularExpression) != nil,
+              ["wall", "floor", "door", "window", "opening", "object"].contains(entity.kind),
+              !entity.label.isEmpty, entity.label.count <= 80,
+              ["low", "medium", "high", "unknown"].contains(entity.confidence),
+              entity.dimensions.count == 3, entity.dimensions.contains(where: { $0 > 0 }), entity.dimensions.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 100 }),
+              entity.transform.count == 4, entity.transform.allSatisfy({ $0.count == 4 && $0.allSatisfy { $0.isFinite } }),
+              zip(entity.transform[3], [0.0, 0, 0, 1]).allSatisfy({ abs($0.0 - $0.1) < 1e-5 }),
+              entity.transform.prefix(3).allSatisfy({ abs($0[3]) < 10000 }) else { return false }
+        let r = entity.transform
+        for i in 0..<3 {
+            for j in 0..<3 {
+                let dot = (0..<3).reduce(0.0) { $0 + r[i][$1] * r[j][$1] }
+                if abs(dot - (i == j ? 1 : 0)) > 1e-3 { return false }
+            }
+        }
+        let det = r[0][0] * (r[1][1]*r[2][2]-r[1][2]*r[2][1])
+            - r[0][1] * (r[1][0]*r[2][2]-r[1][2]*r[2][0]) + r[0][2] * (r[1][0]*r[2][1]-r[1][1]*r[2][0])
+        return det > 0.999 && det < 1.001
+    }
+    private static func validDigest(_ value: String) -> Bool {
+        value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
+    }
+    static func makeSemanticAttachment(_ data: Data, modelSHA: String, sourceCaptureSHA: String) throws -> Data {
+        guard data.count > 0, data.count <= 2 * 1024 * 1024,
+              validDigest(modelSHA), validDigest(sourceCaptureSHA) else { throw CocoaError(.fileReadCorruptFile) }
+        let source = try JSONDecoder().decode(SemanticSource.self, from: data)
+        guard source.schema == "capture_splat.room_semantics.v0.1", source.coordinate_frame == "arkit_world",
+              source.units == "meters", source.frame_binding == "shared_ar_session_no_reset" else { throw CocoaError(.fileReadCorruptFile) }
+        let groups = [source.walls, source.floors, source.doors, source.windows, source.openings, source.objects]
+        guard groups.reduce(0, { $0 + ($1?.count ?? 0) }) <= 512 else { throw CocoaError(.fileReadTooLarge) }
+        let entities = groups.compactMap { $0 }.flatMap { $0 }.map { item -> SemanticEntity in
+            var label = item.category ?? item.kind
+            if label == "storage", let subtype = item.attributes?.first(where: {
+                $0.type == "StorageType" && ["cabinet", "shelf"].contains($0.value)
+            }) { label = subtype.value }
+            return SemanticEntity(id: item.source_id ?? item.id, kind: item.kind,
+                label: label, confidence: item.confidence ?? "unknown",
+                dimensions: [item.dimensions_meters.x, item.dimensions_meters.y, item.dimensions_meters.z],
+                transform: item.transform_matrix)
+        }
+        guard entities.allSatisfy(validSemanticEntity), Set(entities.map { $0.id }).count == entities.count else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let sourceSHA = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let attachment = SemanticAttachment(schema: "capture_splat.viewer_semantics.v1", model_sha256: modelSHA,
+            source_sha256: sourceSHA, source_capture_sha256: sourceCaptureSHA, coordinate_frame: "arkit_world",
+            units: "meters", entities: entities)
+        return try JSONEncoder().encode(attachment)
+    }
+    static func validSemanticAttachment(_ data: Data, modelSHA: String) -> Bool {
+        guard data.count > 0, data.count <= 2 * 1024 * 1024,
+              let attachment = try? JSONDecoder().decode(SemanticAttachment.self, from: data),
+              attachment.schema == "capture_splat.viewer_semantics.v1", attachment.model_sha256 == modelSHA,
+              validDigest(attachment.source_sha256), validDigest(attachment.source_capture_sha256),
+              attachment.coordinate_frame == "arkit_world", attachment.units == "meters",
+              attachment.entities.count <= 512,
+              Set(attachment.entities.map { $0.id }).count == attachment.entities.count else { return false }
+        return attachment.entities.allSatisfy(validSemanticEntity)
     }
 
     private static func validateCompactSplat(_ data: Data) -> Bool {
@@ -207,11 +311,22 @@ private final class LocalSplatResources: NSObject, WKURLSchemeHandler {
             file = model; mime = "application/octet-stream"
         case "/model.ply" where model.pathExtension.lowercased() == "ply":
             file = model; mime = "application/octet-stream"
+        case "/semantics.json":
+            file = model.appendingPathExtension("semantics.json"); mime = "application/json"
         default: task.didFailWithError(URLError(.fileDoesNotExist)); return
         }
         guard let file else { task.didFailWithError(URLError(.fileDoesNotExist)); return }
         do {
+            if request.path == "/semantics.json" {
+                guard let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                      size > 0, size <= 2 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            }
             var data = try Data(contentsOf: file, options: .mappedIfSafe)
+            if request.path == "/semantics.json" {
+                let modelData = try Data(contentsOf: model, options: .mappedIfSafe)
+                let digest = SHA256.hash(data: modelData).map { String(format: "%02x", $0) }.joined()
+                guard SplatLibrary.validSemanticAttachment(data, modelSHA: digest) else { throw CocoaError(.fileReadCorruptFile) }
+            }
             if request.path == "/index.html", let html = String(data: data, encoding: .utf8) {
                 // Inject only fixed format/camera constants, never sidecar strings or file paths.
                 let format = model.pathExtension.lowercased() == "ply" ? "ply" : "splat"
@@ -236,6 +351,9 @@ private final class LocalSplatResources: NSObject, WKURLSchemeHandler {
                             }
                         }
                     }
+                }
+                if FileManager.default.fileExists(atPath: model.appendingPathExtension("semantics.json").path) {
+                    script += "window.CAPTURE_SPLAT_SEMANTICS={url:'semantics.json'};"
                 }
                 script += "</script>"
                 data = Data(html.replacingOccurrences(of: "<script src=\"main.js\"", with: script + "<script src=\"main.js\"").utf8)

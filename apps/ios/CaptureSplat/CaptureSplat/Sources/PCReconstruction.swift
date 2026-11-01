@@ -286,8 +286,29 @@ final class PCReconstructionClient: ObservableObject {
             let cameraData = try JSONSerialization.data(withJSONObject: camera)
             guard cameraData.count < 2048 else { throw PCError.rejected }
             try cameraData.write(to: model.appendingPathExtension("camera.json"), options: .atomic)
+            var hasLayout = false
+            if state["model_coordinate_frame"] as? String == "arkit_world",
+               state["model_units"] as? String == "meters",
+               let captureSHA = assets.first(where: { $0.path == "capture.json" })?.sha256,
+               state["source_capture_sha256"] as? String == captureSHA,
+               let asset = assets.first(where: { $0.path == "room_plan/room_semantics.json" }) {
+                do {
+                    guard asset.bytes <= 2 * 1024 * 1024 else { throw PCError.rejected }
+                    let sourceData = try Data(contentsOf: asset.url, options: .mappedIfSafe)
+                    guard sourceData.count == asset.bytes,
+                          SHA256.hash(data: sourceData).map({ String(format: "%02x", $0) }).joined() == asset.sha256
+                    else { throw PCError.rejected }
+                    let attachment = try SplatLibrary.makeSemanticAttachment(sourceData, modelSHA: digest, sourceCaptureSHA: captureSHA)
+                    try attachment.write(to: model.appendingPathExtension("semantics.json"), options: .atomic)
+                    hasLayout = !(try JSONDecoder().decode(SplatLibrary.SemanticAttachment.self, from: attachment)).entities.isEmpty
+                } catch {
+                    // A failed optional layout never discards the completed room or saved scan.
+                    hasLayout = false
+                }
+            }
             completedModel = model
-            message = "Splat ready. Reconstruction quality has not been verified."
+            message = hasLayout ? "Room ready. Open Layout to select walls and furniture."
+                                : "Room ready. This scan has no linked layout."
         } catch { message = error.localizedDescription }
     }
 }
@@ -329,10 +350,6 @@ struct PCReconstructionView: View {
             }
             .navigationTitle("PC reconstruction")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-            .interactiveDismissDisabled(client.busy)
-            .onChange(of: client.completedModel) { _, model in
-                if let model { openModel(model) }
-            }
             .sheet(isPresented: $scanning) {
                 LivePairingQRScanner(onInvitation: { invitation in
                     scanning = false

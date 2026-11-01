@@ -41,6 +41,12 @@
     body[data-mode="orbit"] #navigation, body[data-mode="orbit"] #reticle { display: none; }
     @media (max-width:350px) { #toolbar { gap: 5px; left: 10px; right: 10px; } #modes button { min-width: 52px; padding: 8px 9px; } #toolbar > button { padding: 0 10px; } }
     @media (max-height:480px) { #joystick { width: 96px; height: 96px; bottom: 0; } #thumb { left: 24px; top: 24px; } #joystick::before { left: 47px; top: 6px; } #joystick::after { left: 6px; top: 47px; } #move-label { display: none; } #height { bottom: 0; flex-direction: row; } #navigation { bottom: 16px; } #hint { top: 72px; } }
+    #layout-panel { position:absolute;top:76px;left:14px;width:min(290px,calc(100% - 28px));padding:12px;border-radius:16px;z-index:3; }
+    #layout-panel h2 { font-size:15px;margin:0 0 8px; }
+    #layout-items { display:flex;flex-wrap:wrap;gap:6px;max-height:24vh;overflow:auto;touch-action:pan-y; }
+    #layout-items button { background:#ffffff14;padding:9px;border-radius:9px;text-align:left; }
+    #layout-items button[aria-pressed="true"] { background:#43d8ff;color:#07131a; }
+    #layout-selection { font-size:12px;line-height:1.4;color:#d5dfec;margin:10px 0 0; }
   </style>
 </head>
 <body data-mode="walk">
@@ -48,6 +54,7 @@
   <div id="toolbar">
     <div id="modes" class="glass" role="group" aria-label="Navigation mode"><button id="walk" aria-pressed="true">Walk</button><button id="orbit" aria-pressed="false">Orbit</button></div>
     <button id="quality" class="glass" aria-label="Rendering detail. Tap for smoother movement.">Detail</button>
+    <button id="layout" class="glass" aria-pressed="false" hidden>Layout</button>
     <button id="reset" class="glass" aria-label="Return to the starting view">Reset</button>
   </div>
   <div id="hint">Drag to look · Use the pad to move</div><div id="reticle" aria-hidden="true"></div>
@@ -57,6 +64,10 @@
     <button id="speed" class="glass" aria-label="Movement speed. Tap to change.">Normal speed</button>
     <div id="height" role="group" aria-label="Camera height"><button id="up" class="glass" aria-label="Move up">↑</button><button id="down" class="glass" aria-label="Move down">↓</button></div>
   </div>
+  <section id="layout-panel" class="glass" aria-label="Detected room layout" hidden>
+    <h2>Detected layout</h2><div id="layout-items"></div>
+    <p id="layout-selection">Select a wall or furniture item. Bounds are estimates.</p>
+  </section>
   <div id="loading" role="status" aria-live="polite"><div class="spinner"></div><p id="message">Opening your room…</p></div>
   <script src="main.js"></script>
 </body>

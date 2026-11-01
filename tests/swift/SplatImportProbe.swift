@@ -125,6 +125,37 @@ struct SplatImportProbe {
         try require(SplatLibrary.latest == nil, "latest accepted a path escape")
         UserDefaults.standard.set("not-a-uuid.ply", forKey: "latestTrainedSplat")
         try require(SplatLibrary.latest == nil, "latest accepted a non-UUID model name")
-        print("PASS: native full-SH3 PLY import, malformed-input rejection, compact fallback and latest lookup")
+        let digest = String(repeating: "f", count: 64)
+        let captureDigest = String(repeating: "a", count: 64)
+        let identity: [[Double]] = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+        var furniture: [String: Any] = ["id":"object_0", "source_id":"cabinet-source-uuid", "kind":"object",
+            "category":"storage", "confidence":"high", "dimensions_meters":["x":1.2,"y":2.0,"z":0.6],
+            "transform_matrix":identity, "attributes":[["type":"StorageType","value":"cabinet"]]]
+        var room: [String: Any] = ["schema":"capture_splat.room_semantics.v0.1", "coordinate_frame":"arkit_world",
+            "units":"meters", "frame_binding":"shared_ar_session_no_reset", "objects":[furniture]]
+        let sourceJSON = try JSONSerialization.data(withJSONObject: room)
+        let linked = try SplatLibrary.makeSemanticAttachment(sourceJSON, modelSHA:digest, sourceCaptureSHA:captureDigest)
+        try require(SplatLibrary.validSemanticAttachment(linked, modelSHA:digest), "valid semantic attachment rejected")
+        try require(!SplatLibrary.validSemanticAttachment(linked, modelSHA:captureDigest), "layout accepted for a different model")
+        let attachment = try JSONDecoder().decode(SplatLibrary.SemanticAttachment.self, from:linked)
+        try require(attachment.entities[0].label == "cabinet", "cabinet subtype lost")
+        try require(attachment.entities[0].id == "cabinet-source-uuid", "stable source ID lost")
+        room["objects"] = [furniture, furniture]
+        do {
+            _ = try SplatLibrary.makeSemanticAttachment(JSONSerialization.data(withJSONObject:room), modelSHA:digest, sourceCaptureSHA:captureDigest)
+            throw Failure.assertion("duplicate semantic instances accepted")
+        } catch is Failure { throw Failure.assertion("duplicate semantic instances accepted") } catch {}
+        var reflected = identity; reflected[0][0] = -1
+        furniture["transform_matrix"] = reflected; room["objects"] = [furniture]
+        do {
+            _ = try SplatLibrary.makeSemanticAttachment(JSONSerialization.data(withJSONObject:room), modelSHA:digest, sourceCaptureSHA:captureDigest)
+            throw Failure.assertion("reflected semantic frame accepted")
+        } catch is Failure { throw Failure.assertion("reflected semantic frame accepted") } catch {}
+        room["coordinate_frame"] = "unregistered"
+        do {
+            _ = try SplatLibrary.makeSemanticAttachment(JSONSerialization.data(withJSONObject:room), modelSHA:digest, sourceCaptureSHA:captureDigest)
+            throw Failure.assertion("unregistered semantic frame accepted")
+        } catch is Failure { throw Failure.assertion("unregistered semantic frame accepted") } catch {}
+        print("PASS: native Gaussian imports, model-bound semantic attachment, cabinet subtype, stable IDs and malformed-input rejection")
     }
 }
