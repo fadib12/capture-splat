@@ -393,6 +393,21 @@ def handler(store: BridgeStore, token: str, full_store=None):
         def authorized(self):
             if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + token):
                 self.close_connection = True
+                # Drain only a small, bounded rejected body. Closing a Windows
+                # socket with unread POST bytes can reset it before the peer
+                # receives the 401. Never parse or retain unauthenticated data.
+                declared = self.headers.get('Content-Length', '')
+                if declared.isascii() and declared.isdigit() and len(declared) <= 6:
+                    length = int(declared)
+                    if 0 < length <= 65536:
+                        previous_timeout = self.connection.gettimeout()
+                        self.connection.settimeout(0.1)
+                        try:
+                            self.rfile.read(length)
+                        except (TimeoutError, OSError):
+                            pass
+                        finally:
+                            self.connection.settimeout(previous_timeout)
                 self.reply(401, {'error': 'Authentication required.'})
                 return False
             return True
@@ -460,7 +475,8 @@ def handler(store: BridgeStore, token: str, full_store=None):
                 if self.path == '/v1/health':
                     return self.reply(200, {'engine': 'resplat', 'scope': 'single_operator_pc_trial',
                                             'profile': store.profile, 'pipeline_revision': self.scan_store().pipeline_revision,
-                                            'features': ['full_capture_v2'] if full_store is not None else []})
+                                            'features': ['full_capture_v2'] if full_store is not None else [],
+                                            'full_capture_pipeline_revision': full_store.pipeline_revision if full_store is not None else None})
                 match = re.fullmatch(r'/v[12]/scans/([0-9a-f]{64})(/model)?', self.path)
                 if not match: return self.reply(404, {'error': 'Unknown endpoint.'})
                 state = self.scan_store().state(match[1])

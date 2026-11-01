@@ -14,7 +14,7 @@ CHUNK_BYTES = 4 * 1024**2
 MAX_ASSET_BYTES = 2 * 1024**3
 MAX_TOTAL_BYTES = 4 * 1024**3
 MAX_FILES = 4096
-REVISION = 'gsplat-rgbd-v1'
+REVISION = 'gsplat-rgbd-detail-v2'
 ROOT_FILES = {'capture.json', 'imu.csv', 'gps.csv'}
 ROOT_DIRS = {'rgb','depth','confidence','masks','metadata','geometry','video','room_plan','pointcloud_preview'}
 
@@ -80,7 +80,9 @@ class FullCaptureStore(BridgeStore):
         folder=self.folder(identifier)
         if folder.exists():
             state=self.state(identifier)
-            if state['status']=='failed':return self._resubmit(identifier,state)
+            if state['files']!=descriptor['files']:raise ValueError('Stored full inventory changed.')
+            if state['status']=='failed' or (state['status']=='completed' and state.get('pipeline_revision')!=REVISION):
+                return self._resubmit(identifier,state)
             return state
         if sum(1 for _ in islice(self.root.iterdir(),8))>=8:raise ValueError('Archive old full captures first.')
         (folder/'capture').mkdir(parents=True)
@@ -95,6 +97,14 @@ class FullCaptureStore(BridgeStore):
                'attempts_by_revision':{REVISION:1}}
         self.save(identifier,state)
         return state
+
+    def start(self,identifier):
+        state=self.state(identifier)
+        if state['status']=='uploading' and state.get('pipeline_revision')!=REVISION:
+            # Keep interrupted chunks and verified assets resumable across an
+            # upgrade. Only advance the revision once the full inventory passes.
+            self._resubmit(identifier,state)
+        return super().start(identifier)
 
     def _verified_uploads(self,identifier,state):
         descriptor=_bounded_file(self.folder(identifier)/'descriptor.json',self.root,24*1024**2)

@@ -8,11 +8,21 @@ import ipaddress
 import json
 from pathlib import Path
 import secrets
+import socket
 import ssl
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
 from capture_splat.pc_bridge import BridgeStore, handler, wsl_worker
+
+
+class ExclusiveHTTPServer(HTTPServer):
+    """A PC endpoint must have one owning process, including on Windows."""
+    allow_reuse_address = False
+    def server_bind(self):
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def main():
@@ -68,7 +78,7 @@ def main():
         full_store = FullCaptureStore(state_dir / 'full-scans',rgbd_worker(repo),
                                      runtime_ready=lambda: (state_dir / 'rgbd-runtime-ready.json').is_file())
         full_store.active = store.active
-    server = HTTPServer((args.host, args.port), handler(store, config['token'], full_store=full_store))
+    server = ExclusiveHTTPServer((args.host, args.port), handler(store, config['token'], full_store=full_store))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(state_dir / 'cert.pem', state_dir / 'key.pem')

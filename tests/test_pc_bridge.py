@@ -378,3 +378,26 @@ def test_run_rejects_modified_manifest_and_releases_gpu_slot(tmp_path):
         store.start(state['id'])
     assert not store.active.locked()
     assert store.state(state['id'])['status'] == 'uploading'
+
+
+def test_rejected_partial_body_has_bounded_wait_and_never_creates_scan(bridge):
+    store,port,_=bridge
+    connection=HTTPConnection('127.0.0.1',port,timeout=3)
+    connection.putrequest('POST','/v1/scans')
+    connection.putheader('Content-Length','65536')
+    connection.endheaders()  # Deliberately withhold the advertised body.
+    start=time.monotonic()
+    response=connection.getresponse()
+    assert response.status==401 and response.read()
+    assert time.monotonic()-start<2
+    connection.close()
+    assert not list(store.root.iterdir())
+
+
+def test_bridge_port_has_one_owner_even_on_windows():
+    from scripts.start_resplat_pc import ExclusiveHTTPServer
+    from http.server import BaseHTTPRequestHandler
+    first=ExclusiveHTTPServer(('127.0.0.1',0),BaseHTTPRequestHandler)
+    try:
+        with pytest.raises(OSError):ExclusiveHTTPServer(first.server_address,BaseHTTPRequestHandler)
+    finally:first.server_close()

@@ -5,6 +5,7 @@ import functools
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
 import threading
@@ -36,6 +37,8 @@ def main():
     if sha(a.model) != reference['models'][0]['sha256']:
         raise ValueError('Reference canvases belong to another model.')
     a.out.mkdir(parents=True, exist_ok=False)
+    browser_temp=a.out/'browser-temp';browser_temp.mkdir()
+    for key in ('TEMP','TMP','TMPDIR'):os.environ[key]=str(browser_temp.resolve())
     viewer = ROOT/'apps/ios/CaptureSplat/CaptureSplat/Resources/SplatViewer'
     for name in ('index.html', 'main.js'):
         shutil.copyfile(viewer/name, a.out/name)

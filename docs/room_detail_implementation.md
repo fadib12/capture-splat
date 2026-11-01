@@ -49,9 +49,28 @@ caches are dimension checked. Camera alignment, source images, depth evidence
 and initialization are hash bound before training; consumed image and depth
 bindings are checked again before publishing a candidate.
 
-A fresh same-input full-resolution candidate is running under
-`runs/rgbd-room-193312-fullres-v1`. Visual comparison and its final result must
-be recorded before declaring this candidate better than the original.
+The completed same-input candidate under `runs/rgbd-room-193312-fullres-v1`
+trained 7,000 steps on 262 training images at 1920x1440, consumed 8,922,869
+measured depth samples over 2,186 depth-loss steps, and retained 200,000
+Gaussians in a 47,201,477-byte SH3 PLY. The exact consumed cache pixels were
+checked against the declared resize of each source image before publication.
+Initialization used 60,878 corrected RGB-D seed points and zero unchanged mesh
+points. Actual trainer consumption binds the alignment report.
+
+At eight identical original cameras and full source resolution, mean PSNR
+changed from 22.737 to 23.099 dB and SSIM from 0.77986 to 0.78915. Six views
+improved; two regressed (-0.450 and -0.272 dB). Worst-view PSNR changed from
+20.409 to 20.434 dB. Visual inspection found some clearer furniture and rug
+edges, but soft door panels remain. This is a modest same-room improvement,
+not all-angle sharpness, a 4K capture claim or universal room validation.
+The result remains `hold` with visual/metric/collision/navigation authority
+false. The original is retained both in the comparison and in the archived
+PC job. Camera refinement, initialization and training changed together;
+this trial does not isolate their individual contributions.
+
+`compare_room_detail.py` produces the fixed-camera report and source-pixel
+crops; `publish_room_detail.py` creates the offline comparison. Both keep
+raw images, models and generated reports outside Git.
 
 ## 4. Capture guidance
 
@@ -73,3 +92,44 @@ recording-lifecycle probes run before the Release IPA build. Source camera
 metadata, full-screen navigation, rendering pixel limits and local export are
 preserved. Actual iPhone memory, thermal and touch acceptance still require a
 physical device; browser/CI checks cannot establish those results.
+
+
+## Completed integration checks
+
+App 0.1.9 build 12 was built from source commit
+`e00a513d526cb1cb9cccefbc8fb916670d29841f`. The downloaded unsigned ARM64 IPA
+passed ZIP integrity, version/build/source-commit checks, and exact bundled
+asset comparison against that commit. Native coverage, Gaussian import,
+full-capture transfer and Foundation gzip download probes passed before
+Release compilation. Later PC-only fixes preserve the native API contract.
+
+The exact candidate passed the current viewer's browser-generated simultaneous
+touch movement/look, release-to-stop, reset, Walk/Orbit, portrait/landscape,
+SH3 retention, pixel-budget and offline-resource checks. The diagnostic parity
+hook was absent from the product page. These browser checks do not establish
+physical iPhone performance.
+
+The private PC revision is `gsplat-rgbd-detail-v2`. Complete older jobs upgrade
+by retaining their original result and reusing the verified uploaded inventory.
+Partial older uploads retain their chunks and advance revision only after the
+complete inventory passes. The real same-input trial was attached to the job
+with an explicit reused-compute receipt; the HTTP request did not secretly
+train another model. Its authenticated TLS download matched the paired leaf
+certificate and reproduced all 47,201,477 decoded bytes and the model digest;
+lossless wire size was 44,726,807 bytes. Existing pairing credentials remain
+local and unchanged.
+
+Final delivery checks found older Windows bridge listeners sharing the port.
+Only verified owned bridge processes were restarted after confirming no active
+jobs. The launcher now uses exclusive address ownership, tested by rejecting
+a second listener. A bounded 100-ms, 64-KiB drain fixes Windows resets when
+rejecting small unauthenticated POST bodies; unauthenticated data is never
+parsed or retained. Tests also cover an advertised body that never arrives.
+
+
+Final host validation passed `compileall`, `git diff --check`, the public-file
+credential/name/path scan, and the full suite: 435 passed, 140 skipped. Skipped
+platform/dependency tests are not counted as passing. The real CUDA training,
+actual-source pixel checks, candidate browser navigation and pinned-certificate
+TLS model transfer provide separate execution evidence. Physical-device and
+multi-room visual qualification remain open; they are not implied by this build.

@@ -3,7 +3,8 @@
 This local PnP lane supplements, and does not replace, the frozen COLMAP control.
 Only confident measured-depth features anchor the original ARKit world frame.
 """
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import numpy as np
 from .json_utils import load_json_strict, write_json_strict
 from .rgbd_training import sha256, sensor_samples
@@ -135,4 +136,43 @@ def refine(out):
     for name,digest in bindings.items():
         if sha256(out/'dataset/images'/name)!=digest:raise ValueError('Image changed during alignment.')
     write_json_strict(out/'camera-alignment.json',report)
+    return report
+
+
+def verify_alignment(out, expected_sha256=None):
+    """Revalidate the precise generated camera/seed evidence consumed by training."""
+    out=Path(out);path=out/'camera-alignment.json'
+    if not 0<path.stat().st_size<=4*1024**2:raise ValueError('Alignment report exceeds limits.')
+    digest=sha256(path)
+    if expected_sha256 is not None and digest!=expected_sha256:raise ValueError('Consumed camera alignment changed.')
+    report=load_json_strict(path)
+    if report.get('schema')!='capture_splat.rgbd_alignment.v1':raise ValueError('Unsupported alignment schema.')
+    index_path=out/'dataset/sensor-index.json'
+    if sha256(index_path)!=report['index_sha256']:raise ValueError('Alignment index binding changed.')
+    frames=load_json_strict(index_path)['frames']
+    if not 1<=len(frames)<=600 or set(report['image_sha256'])!=set(frames):raise ValueError('Alignment image inventory changed.')
+    for name,binding in report['image_sha256'].items():
+        if not re.fullmatch(r'[0-9]{6}\.(jpg|png)',name):raise ValueError('Invalid aligned image path.')
+        image=out/'dataset/images'/name
+        if image.stat().st_size>32*1024**2 or sha256(image)!=binding:raise ValueError('Alignment image binding changed.')
+    if len(report['sensor_assets'])>1800:raise ValueError('Alignment sensor inventory exceeds limits.')
+    for name,binding in report['sensor_assets'].items():
+        relative=PurePosixPath(name)
+        if not name or relative.as_posix()!=name or relative.is_absolute() or any(part in ('','.','..') for part in relative.parts) or ':' in name or chr(92) in name:
+            raise ValueError('Invalid alignment sensor path.')
+        asset=out/'prepared/frames'/relative
+        if asset.stat().st_size>4*1024**2 or sha256(asset)!=binding:raise ValueError('Alignment depth binding changed.')
+    if report['seed_path']!='sparse/0/aligned-points3D.txt':raise ValueError('Invalid alignment seed path.')
+    seed=out/'dataset'/report['seed_path']
+    if seed.stat().st_size>32*1024**2 or sha256(seed)!=report['seed_sha256']:raise ValueError('Aligned initialization changed.')
+    corrections=report['corrected_c2w']
+    if set(corrections)-set(frames) or len(corrections)!=report['accepted_cameras']:raise ValueError('Corrected camera inventory changed.')
+    for pose in corrections.values():
+        matrix=np.asarray(pose,dtype=float)
+        if matrix.shape!=(4,4) or not np.isfinite(matrix).all() or not np.allclose(matrix[3],[0,0,0,1],atol=1e-6):
+            raise ValueError('Invalid corrected camera transform.')
+        rotation=matrix[:3,:3]
+        if not np.allclose(rotation.T@rotation,np.eye(3),atol=1e-4) or abs(np.linalg.det(rotation)-1)>1e-4:
+            raise ValueError('Invalid corrected camera rotation.')
+    if sha256(path)!=digest or sha256(index_path)!=report['index_sha256']:raise ValueError('Alignment changed during validation.')
     return report

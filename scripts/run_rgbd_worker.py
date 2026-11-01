@@ -12,6 +12,7 @@ sys.path.insert(0,str(ROOT/'python'))
 from capture_splat.rgbd_training import prepare_rgbd,sha256
 from capture_splat.json_utils import load_json_strict,write_json_strict
 from capture_splat.ply_stats import inspect_ply
+from capture_splat.full_capture_bridge import REVISION
 
 
 def run(capture,out,steps=7000,reuse_prepared=False,data_factor=1,align_cameras=True):
@@ -52,11 +53,22 @@ def finalize(capture,out,steps):
         raise ValueError('Measured depth was not consumed in differentiable training.')
     for name,binding in ledger['sensor_assets'].items():
         if sha256(out/'prepared/frames'/name)!=binding:raise ValueError('Consumed sensor asset changed.')
+    import numpy as np
+    from PIL import Image
+    factor=ledger.get('data_factor',2)
+    if factor not in (1,2):raise ValueError('Unsupported training resolution factor.')
     for name,binding in ledger['training_images'].items():
-        if sha256(out/'dataset'/ledger.get('training_cache','images_sensor_scaled')/(Path(name).stem+'.png'))!=binding:raise ValueError('Consumed image changed.')
+        cached=out/'dataset'/ledger.get('training_cache','images_sensor_scaled')/(Path(name).stem+'.png')
+        if sha256(cached)!=binding:raise ValueError('Consumed image changed.')
+        with Image.open(out/'dataset/images'/name) as image, Image.open(cached) as trained:
+            size=(image.width//factor,image.height//factor)
+            expected=image.convert('RGB').resize(size,Image.Resampling.BICUBIC)
+            if trained.size!=size or not np.array_equal(np.asarray(trained.convert('RGB')),np.asarray(expected)):
+                raise ValueError('Consumed training pixels differ from the bound source image.')
     for name,binding in preparation.get('source_asset_sha256',{}).items():
         if sha256(capture/name)!=binding:raise ValueError('Capture evidence changed during reconstruction.')
-    alignment=load_json_strict(out/'camera-alignment.json') if ledger.get('camera_alignment_sha256') else None
+    from capture_splat.rgbd_alignment import verify_alignment
+    alignment=verify_alignment(out,ledger['camera_alignment_sha256']) if ledger.get('camera_alignment_sha256') else None
     digest=sha256(destination/'gaussians.ply')
     report=dict(ledger,source_manifest_sha256=sha256(capture/'capture.json'),
                 preparation_sha256=sha256(out/'preparation.json'),ply_sha256=digest,
@@ -68,7 +80,7 @@ def finalize(capture,out,steps):
                 video_supplements_prepared=preparation['continuous_video_images'],
                 decision='hold',authority={'visual_quality':False,'metric':False,'collision':False,'navigation':False},
                 raw_imu_directly_supervised=False,raw_gps_directly_supervised=False,
-                normal_supervision_applied=False)
+                normal_supervision_applied=False,source_pixel_verification='all consumed training images matched declared source resize')
     if report['source_manifest_sha256']!=preparation['source_manifest_sha256']:
         raise ValueError('Source capture changed during training.')
     write_json_strict(out/'training-consumption.json',report)
@@ -77,7 +89,7 @@ def finalize(capture,out,steps):
     index=load_json_strict(out/'dataset/sensor-index.json')['frames']
     first=sorted(index)[0]
     pose=alignment['corrected_c2w'].get(first,index[first]['transform_matrix']) if alignment else index[first]['transform_matrix']
-    receipt={'pipeline_revision':'gsplat-rgbd-v1','engine':'gsplat','profile':'rgbd',
+    receipt={'pipeline_revision':REVISION,'engine':'gsplat','profile':'rgbd',
              'result_format':'ply','result_path':'inference/gaussians.ply','sha256':digest,
              'bytes':model.stat().st_size,'training_consumption_sha256':sha256(out/'training-consumption.json'),
              'viewer_camera':{'convention':'opengl','position':[pose[i][3] for i in range(3)],

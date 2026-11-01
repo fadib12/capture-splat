@@ -33,15 +33,8 @@ def run(out,steps,data_factor=1):
     index_path=out/'dataset/sensor-index.json'
     index=load_json_strict(index_path)['frames']
     alignment_path=out/'camera-alignment.json'
-    alignment=load_json_strict(alignment_path) if alignment_path.exists() else None
-    if alignment:
-        if alignment['index_sha256']!=sha256(index_path):raise ValueError('Alignment index binding changed.')
-        for name,digest in alignment['image_sha256'].items():
-            if sha256(out/'dataset/images'/name)!=digest:raise ValueError('Alignment image binding changed.')
-        for name,digest in alignment['sensor_assets'].items():
-            if sha256(frames_root/name)!=digest:raise ValueError('Alignment depth binding changed.')
-        if sha256(out/'dataset'/alignment['seed_path'])!=alignment['seed_sha256']:
-            raise ValueError('Aligned initialization changed.')
+    from capture_splat.rgbd_alignment import verify_alignment
+    alignment=verify_alignment(out) if alignment_path.exists() else None
     ledger={'depth_loss_steps':0,'depth_samples_consumed':0,'depth_loss_sum':0.,
             'sensor_assets':{},'training_images':{},'video_training_images':[],
             'depth_loss_differentiable':True}
@@ -64,6 +57,9 @@ def run(out,steps,data_factor=1):
                     if not target.exists():image.convert('RGB').resize(size,Image.Resampling.BICUBIC).save(target)
                     with Image.open(target) as cached:
                         if cached.size!=size:raise ValueError('Cached image resolution differs from training configuration.')
+                        expected=image.convert('RGB').resize(size,Image.Resampling.BICUBIC)
+                        if not np.array_equal(np.asarray(cached.convert('RGB')),np.asarray(expected)):
+                            raise ValueError('Cached training pixels differ from the bound source image.')
                 K=np.array([[intr['fl_x']*size[0]/intr['w'],0,intr['cx']*size[0]/intr['w']],
                             [0,intr['fl_y']*size[1]/intr['h'],intr['cy']*size[1]/intr['h']],[0,0,1.]])
                 self.image_paths.append(str(target));self.camera_ids.append(i);self.Ks_dict[i]=K

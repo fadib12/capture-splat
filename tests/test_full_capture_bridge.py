@@ -110,3 +110,47 @@ def test_resumes_after_interrupted_assembly_or_rename(tmp_path):
         store.upload_chunk(state['id'],index,0,b'video',hashlib.sha256(b'video').hexdigest())
         assert target.read_bytes()==b'video'
         assert str(index) in store.state(state['id'])['uploaded']
+
+def test_completed_revision_upgrade_preserves_original_and_verified_uploads(tmp_path):
+    from capture_splat.full_capture_bridge import REVISION
+    root,data,body=package(tmp_path)
+    store=FullCaptureStore(tmp_path/'scans',lambda _:None)
+    state=store.create(body);identifier=state['id']
+    for i,item in enumerate(data['files']):
+        if item['path']=='capture.json':continue
+        content=(root/item['path']).read_bytes()
+        store.upload_chunk(identifier,i,0,content,hashlib.sha256(content).hexdigest())
+    state=store.state(identifier)
+    state.update(status='completed',pipeline_revision='gsplat-rgbd-v1',attempts_by_revision={'gsplat-rgbd-v1':1})
+    store.save(identifier,state)
+    result=store.folder(identifier)/'result';result.mkdir();(result/'original.txt').write_text('retained original')
+    upgraded=store.create(body)
+    assert upgraded['status']=='uploading' and upgraded['pipeline_revision']==REVISION
+    assert len(upgraded['uploaded'])==len(data['files']) and upgraded['attempt']==2
+    assert (store.folder(identifier)/'superseded-result-1/original.txt').read_text()=='retained original'
+    assert not result.exists()
+    assert store.create(body)['attempt']==2
+
+
+def test_partial_old_revision_upload_still_resumes_without_mutation(tmp_path):
+    root,data,body=package(tmp_path)
+    store=FullCaptureStore(tmp_path/'scans',lambda _:None)
+    state=store.create(body);identifier=state['id']
+    state.update(pipeline_revision='gsplat-rgbd-v1',attempts_by_revision={'gsplat-rgbd-v1':1})
+    store.save(identifier,state)
+    resumed=store.create(body)
+    assert resumed['uploaded']==state['uploaded'] and resumed['pipeline_revision']=='gsplat-rgbd-v1'
+    with pytest.raises(ValueError,match='Missing capture asset'):store.start(identifier)
+    assert store.state(identifier)['attempt']==1
+    for i,item in enumerate(data['files']):
+        if item['path']=='capture.json':continue
+        content=(root/item['path']).read_bytes()
+        store.upload_chunk(identifier,i,0,content,hashlib.sha256(content).hexdigest())
+    # Upgrade only after the complete inventory passes; hold execution if the
+    # runtime is unavailable. The preserved assets must not need another upload.
+    store.runtime_ready=lambda:False
+    with pytest.raises(ValueError,match='runtime'):store.start(identifier)
+    state=store.state(identifier)
+    from capture_splat.full_capture_bridge import REVISION
+    assert state['pipeline_revision']==REVISION and state['attempt']==2
+    assert len(state['uploaded'])==len(data['files'])
