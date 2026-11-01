@@ -1985,7 +1985,7 @@ final class CaptureController: NSObject, ObservableObject {
     @available(iOS 16.0, *)
     private func roomSurfaceSemantic(kind: String, index: Int, surface: CapturedRoom.Surface) -> [String: Any] {
         ["id": "\(kind)_\(index)", "source_id": surface.identifier.uuidString,
-         "kind": kind, "confidence": String(describing: surface.confidence),
+         "kind": kind, "confidence": roomSemanticConfidence(surface.confidence),
          "dimensions_meters": vectorReport(surface.dimensions), "transform_matrix": surface.transform.rows,
          "center_meters": vectorReport(SIMD3<Float>(surface.transform.columns.3.x,
                                                    surface.transform.columns.3.y, surface.transform.columns.3.z))]
@@ -1995,17 +1995,36 @@ final class CaptureController: NSObject, ObservableObject {
     private func roomObjectSemantic(index: Int, object: CapturedRoom.Object) -> [String: Any] {
         var record: [String: Any] = [
             "id": "object_\(index)", "source_id": object.identifier.uuidString, "kind": "object",
-            "category": String(describing: object.category), "confidence": String(describing: object.confidence),
+            "category": String(describing: object.category), "confidence": roomSemanticConfidence(object.confidence),
             "dimensions_meters": vectorReport(object.dimensions), "transform_matrix": object.transform.rows,
             "center_meters": vectorReport(SIMD3<Float>(object.transform.columns.3.x,
                                                        object.transform.columns.3.y, object.transform.columns.3.z)),
         ]
         if #available(iOS 17.0, *) {
-            record["attributes"] = object.attributes.map {
-                ["type": String(describing: type(of: $0)), "value": String(describing: $0)]
+            record["attributes"] = object.attributes.map { attribute -> [String: String] in
+                if let storage = attribute as? StorageType {
+                    let value: String
+                    switch storage {
+                    case .cabinet: value = "cabinet"
+                    case .shelf: value = "shelf"
+                    @unknown default: value = "unknown"
+                    }
+                    return ["type": "StorageType", "value": value]
+                }
+                return ["type": String(describing: type(of: attribute)), "value": String(describing: attribute)]
             }
         }
         return record
+    }
+
+    @available(iOS 16.0, *)
+    private func roomSemanticConfidence(_ confidence: CapturedRoom.Confidence) -> String {
+        switch confidence {
+        case .high: return "high"
+        case .medium: return "medium"
+        case .low: return "low"
+        @unknown default: return "unknown"
+        }
     }
 
     private func vectorReport(_ vector: SIMD3<Float>) -> [String: Float] {
@@ -5174,6 +5193,9 @@ extension CaptureController: ARSessionDelegate {
         latestFeaturePointCount = frame.rawFeaturePoints?.points.count ?? 0
         updateMotionRate(from: frame)
         if isRecording, currentSessionDirectory != nil {
+            // Starting RoomPlan is scheduled outside SwiftUI's view update.
+            // No writer may accept a preview frame before that ownership handoff.
+            guard !requestsRoomSemantics || didAttemptSharedRoomPlan else { return }
             let width = CVPixelBufferGetWidth(frame.capturedImage)
             let height = CVPixelBufferGetHeight(frame.capturedImage)
             // The Record action and SwiftUI session reconfiguration can occur on

@@ -95,7 +95,9 @@ struct ARCaptureView: UIViewRepresentable {
                 lastUsesDepth = policy.usesDepth
                 lastUsesCaptureVideoFormat = usesCaptureVideoFormat
             }
-            capture.startRoomSemanticsIfReady()
+            DispatchQueue.main.async { [weak capture] in
+                capture?.startRoomSemanticsIfReady()
+            }
             renderer.update(view: view, capture: capture)
         }
 

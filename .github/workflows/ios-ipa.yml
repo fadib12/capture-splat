@@ -82,7 +82,7 @@ jobs:
           test -f "$APP_PATH/SplatViewer/THREE-LICENSE"
           /usr/libexec/PlistBuddy -c "Add :CaptureSplatBuildCommit string $GITHUB_SHA" "$APP_PATH/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "0.2.0"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "13"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "14"
           mkdir -p "$RUNNER_TEMP/package/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
           cd "$RUNNER_TEMP/package"
